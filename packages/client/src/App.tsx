@@ -21,9 +21,19 @@ interface SessionInfo {
   terminalNodeId?: string | null
 }
 
+function getWebSocketUrl() {
+  const configuredUrl = import.meta.env.VITE_WS_URL
+  if (typeof configuredUrl === 'string' && configuredUrl.trim().length > 0) {
+    return configuredUrl
+  }
+
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${protocol}//${window.location.host}/ws`
+}
+
 function App() {
   const terminalManager = useTerminalManager()
-  const { send, request, onMessage, isConnected } = useWebSocket(`ws://${window.location.hostname}:${window.location.port}/ws`)
+  const { send, request, onMessage, isConnected } = useWebSocket(getWebSocketUrl())
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [sessions, setSessions] = useState<SessionInfo[]>([])
   const [centerTerminalNodeId, setCenterTerminalNodeId] = useState<string | null>(null)
@@ -68,6 +78,19 @@ function App() {
     setSessions(activeSessions)
     return activeSessions
   }, [request])
+
+  const restoreSessionWorkspace = useCallback(
+    async (sessionInfo: SessionInfo) => {
+      setSessionId(sessionInfo.id)
+      sessionIdRef.current = sessionInfo.id
+      await loadWorkspace(sessionInfo.workspaceId)
+      if (sessionInfo.terminalNodeId) {
+        setFocusMode('session')
+        setCenterTerminalNodeId(sessionInfo.terminalNodeId)
+      }
+    },
+    [loadWorkspace],
+  )
 
   const handleMessage = useCallback(
     (msg: { type: string; payload: unknown }) => {
@@ -115,10 +138,23 @@ function App() {
     async (sid: string) => {
       try {
         const resp = await request(MsgType.SESSION_ATTACH, { sessionId: sid })
+        if (resp.type === MsgType.ERROR) {
+          const message =
+            typeof resp.payload === 'object' && resp.payload !== null
+              ? String((resp.payload as { message?: unknown }).message ?? `Failed to attach session ${sid}`)
+              : `Failed to attach session ${sid}`
+          throw new Error(message)
+        }
+
         const p = resp.payload as {
-          session: { id: string; cwd: string; status: string; workspaceId?: string; terminalNodeId?: string | null }
+          session?: { id: string; cwd: string; status: string; workspaceId?: string; terminalNodeId?: string | null }
           graph?: { nodes: GraphNode[]; edges: GraphEdge[] }
         }
+
+        if (!p.session) {
+          throw new Error(`Attach response for session ${sid} did not include session data`)
+        }
+
         setSessionId(sid)
         sessionIdRef.current = sid
 
@@ -144,13 +180,24 @@ function App() {
     const { cols, rows } = { cols: 80, rows: 24 }
     try {
       const response = await request(MsgType.SESSION_CREATE, { cols, rows })
+      if (response.type === MsgType.ERROR) {
+        const message =
+          typeof response.payload === 'object' && response.payload !== null
+            ? String((response.payload as { message?: unknown }).message ?? 'Failed to create session')
+            : 'Failed to create session'
+        throw new Error(message)
+      }
+
       const p = response.payload as {
-        session: {
+        session?: {
           id: string
           cwd: string
           workspaceId?: string
           terminalNodeId?: string | null
         }
+      }
+      if (!p.session) {
+        throw new Error('Session create response did not include session data')
       }
       const sid = p.session.id
       setSessionId(sid)
@@ -173,10 +220,16 @@ function App() {
 
     const init = async () => {
       try {
-        const activeSessions = await refreshSessions()
+        const allSessions = await refreshSessions()
+        const liveSession = allSessions.find((session) => session.status === 'active')
 
-        if (activeSessions.length > 0) {
-          await attachSession(activeSessions[0].id)
+        if (liveSession) {
+          const attached = await attachSession(liveSession.id)
+          if (!attached) {
+            await restoreSessionWorkspace(liveSession)
+          }
+        } else if (allSessions.length > 0) {
+          await restoreSessionWorkspace(allSessions[0]!)
         } else {
           await createSession()
         }
@@ -186,7 +239,7 @@ function App() {
       }
     }
     init()
-  }, [attachSession, createSession, isConnected, refreshSessions])
+  }, [attachSession, createSession, isConnected, refreshSessions, restoreSessionWorkspace])
 
   useEffect(() => {
     if (viewMode !== 'graph' || !workspace) {
@@ -307,25 +360,23 @@ function App() {
       if (sid === sessionIdRef.current) return
       const sessionInfo = sessions.find((session) => session.id === sid)
       if (sessionInfo && sessionInfo.status !== 'active') {
-        setSessionId(sid)
-        sessionIdRef.current = sid
-        await loadWorkspace(sessionInfo.workspaceId)
-        if (sessionInfo.terminalNodeId) {
-          setFocusMode('session')
-          setCenterTerminalNodeId(sessionInfo.terminalNodeId)
-        }
+        await restoreSessionWorkspace(sessionInfo)
         return
       }
       attachedTerminalKeysRef.current.clear()
       terminalManager.syncRuntimes(new Set())
       clearGraph()
       const attached = await attachSession(sid)
+      if (!attached && sessionInfo) {
+        await restoreSessionWorkspace(sessionInfo)
+        return
+      }
       if (attached?.terminalNodeId) {
         setFocusMode('session')
         setCenterTerminalNodeId(attached.terminalNodeId)
       }
     },
-    [attachSession, clearGraph, loadWorkspace, sessions, terminalManager],
+    [attachSession, clearGraph, restoreSessionWorkspace, sessions, terminalManager],
   )
 
   const handleDeleteSession = useCallback(

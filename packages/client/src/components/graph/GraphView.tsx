@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ReactFlow, Background, Controls, MiniMap, Connection, ConnectionMode, type ReactFlowInstance, useNodesState, useEdgesState, BackgroundVariant } from '@xyflow/react'
+import { ReactFlow, Background, Controls, MiniMap, Connection, ConnectionMode, type FinalConnectionState, type ReactFlowInstance, useNodesState, useEdgesState, BackgroundVariant } from '@xyflow/react'
 import type { Node as FlowNode } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import type { WorkspaceTerminalNode } from '@mindmap/shared'
 import { useGraphStore } from '../../store/graphStore.js'
 import { buildNodeToTerminalEdges, buildTerminalLinkEdges } from '../../lib/terminalConnections.js'
+import { isCanvasBranchDropTarget } from '../../lib/terminalBranchDrop.js'
 import TerminalNode from './TerminalNode.js'
 import { shouldFitWorkspaceCanvas } from '../../lib/workspaceViewport.js'
 
@@ -64,11 +65,14 @@ export default function GraphView({
           onResizeTerminalNode,
           onMoveTerminalNode,
           onDeleteTerminalNode,
+          onCreateTerminalBranch: (sourceTerminalNodeId: string, position?: { x: number; y: number }) => {
+            onCreateTerminalLink?.(sourceTerminalNodeId, undefined, position)
+          },
           onRenameSession,
           onResumeTerminalNode,
         },
       })),
-    [onDeleteTerminalNode, onMoveTerminalNode, onRenameSession, onResizeTerminalNode, onResumeTerminalNode, storeTerminalNodes],
+    [onCreateTerminalLink, onDeleteTerminalNode, onMoveTerminalNode, onRenameSession, onResizeTerminalNode, onResumeTerminalNode, storeTerminalNodes],
   )
   const nodeToTerminalEdges = useMemo(() => buildNodeToTerminalEdges(storeTerminalNodes), [storeTerminalNodes])
   const terminalLinkEdges = useMemo(() => buildTerminalLinkEdges(storeTerminalLinks), [storeTerminalLinks])
@@ -170,20 +174,26 @@ export default function GraphView({
   }, [])
 
   const handleConnectEnd = useCallback(
-    (event: MouseEvent | TouchEvent) => {
-      if (!pendingConnection?.sourceNodeId || !reactFlowInstance) {
+    (event: MouseEvent | TouchEvent, connectionState: FinalConnectionState) => {
+      const sourceNodeId = connectionState.fromHandle?.nodeId ?? pendingConnection?.sourceNodeId ?? null
+
+      if (!sourceNodeId || !reactFlowInstance) {
         setPendingConnection(null)
         return
       }
-      const sourceNode = nodes.find((node) => node.id === pendingConnection.sourceNodeId)
+      if (connectionState.toHandle) {
+        setPendingConnection(null)
+        return
+      }
+
+      const sourceNode = nodes.find((node) => node.id === sourceNodeId)
       if (sourceNode?.type !== 'terminal') {
         setPendingConnection(null)
         return
       }
 
       const target = event.target as HTMLElement | null
-      const isPane = Boolean(target?.classList.contains('react-flow__pane') || target?.closest('.react-flow__pane'))
-      if (!isPane) {
+      if (!isCanvasBranchDropTarget(target)) {
         setPendingConnection(null)
         return
       }
@@ -200,7 +210,7 @@ export default function GraphView({
       }
 
       const flowPosition = reactFlowInstance.screenToFlowPosition(point)
-      onCreateTerminalLink?.(pendingConnection.sourceNodeId, undefined, flowPosition)
+      onCreateTerminalLink?.(sourceNodeId, undefined, flowPosition)
       setPendingConnection(null)
     },
     [nodes, onCreateTerminalLink, pendingConnection, reactFlowInstance],

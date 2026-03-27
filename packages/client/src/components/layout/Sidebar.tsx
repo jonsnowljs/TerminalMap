@@ -194,6 +194,7 @@ export default function Sidebar({
               >
                 <div className="flex items-center gap-2 px-3 py-3">
                   <button
+                    type="button"
                     onClick={() => onSelectWorkspace(windowItem.id)}
                     className="flex min-w-0 flex-1 items-center gap-2 text-left"
                   >
@@ -230,8 +231,7 @@ export default function Sidebar({
                           maxLength={120}
                         />
                       ) : (
-                        <button
-                          type="button"
+                        <span
                           className="block max-w-full truncate text-left text-[15px] font-semibold text-[var(--text-strong)]"
                           onClick={(event) => event.stopPropagation()}
                           onDoubleClick={(event) => {
@@ -243,7 +243,7 @@ export default function Sidebar({
                           title="Double-click to rename window"
                         >
                           {windowItem.label}
-                        </button>
+                        </span>
                       )}
                       <span className="mt-0.5 block text-[10px] font-mono text-[var(--text-faint)]">
                         {windowItem.isCurrent ? 'current window' : windowItem.id.slice(0, 12)}

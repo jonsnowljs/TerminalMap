@@ -1,4 +1,7 @@
 import * as pty from 'node-pty';
+import { accessSync, chmodSync, constants, statSync } from 'fs';
+import { createRequire } from 'module';
+import { dirname, join } from 'path';
 import type { WebSocket } from 'ws';
 import { config } from '../config.js';
 import { CommandDetector } from './CommandDetector.js';
@@ -42,10 +45,86 @@ export class SessionManager {
   private sessions = new Map<string, ManagedSession>();
   private attachmentsByTerminalNode = new Map<string, WorkspaceAttachment>();
   private static readonly MAX_RECENT_OUTPUT_BYTES = 64 * 1024;
+  private static nodePtyHelperChecked = false;
+
+  private isExecutableFile(path: string): boolean {
+    try {
+      accessSync(path, constants.X_OK);
+      return statSync(path).isFile();
+    } catch {
+      return false;
+    }
+  }
+
+  private isUsableDirectory(path: string): boolean {
+    try {
+      return statSync(path).isDirectory();
+    } catch {
+      return false;
+    }
+  }
+
+  private resolveShell(preferredShell?: string): string {
+    const candidates = [
+      preferredShell,
+      config.defaultShell,
+      '/bin/zsh',
+      '/bin/bash',
+      '/bin/sh',
+    ].filter((value): value is string => typeof value === 'string' && value.length > 0);
+
+    for (const candidate of candidates) {
+      if (this.isExecutableFile(candidate)) {
+        return candidate;
+      }
+    }
+
+    throw new Error(`No executable shell found. Tried: ${candidates.join(', ')}`);
+  }
+
+  private resolveCwd(preferredCwd?: string): string {
+    if (preferredCwd && this.isUsableDirectory(preferredCwd)) {
+      return preferredCwd;
+    }
+    if (this.isUsableDirectory(config.defaultCwd)) {
+      return config.defaultCwd;
+    }
+    return process.cwd();
+  }
+
+  private ensureNodePtyHelperExecutable(): void {
+    if (SessionManager.nodePtyHelperChecked || process.platform !== 'darwin') {
+      return;
+    }
+    SessionManager.nodePtyHelperChecked = true;
+
+    try {
+      const require = createRequire(import.meta.url);
+      const packageJsonPath = require.resolve('node-pty/package.json');
+      const helperPath = join(dirname(packageJsonPath), 'prebuilds', `darwin-${process.arch}`, 'spawn-helper');
+
+      if (this.isExecutableFile(helperPath)) {
+        return;
+      }
+
+      chmodSync(helperPath, 0o755);
+
+      if (!this.isExecutableFile(helperPath)) {
+        throw new Error(`spawn-helper is still not executable at ${helperPath}`);
+      }
+    } catch (error) {
+      SessionManager.nodePtyHelperChecked = false;
+      throw new Error(
+        `Failed to prepare node-pty spawn-helper: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
 
   create(opts: CreateSessionOpts): ManagedSession {
-    const shell = opts.shell || config.defaultShell;
-    const cwd = opts.cwd || config.defaultCwd;
+    this.ensureNodePtyHelperExecutable();
+
+    const shell = this.resolveShell(opts.shell);
+    const cwd = this.resolveCwd(opts.cwd);
 
     // Filter env to only string values (node-pty requires this)
     const env: Record<string, string> = {};

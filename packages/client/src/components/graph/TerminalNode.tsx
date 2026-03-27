@@ -8,6 +8,7 @@ type TerminalFlowNodeData = WorkspaceTerminalNode & {
   onResizeTerminalNode?: (terminalNodeId: string, size: { width: number; height: number }) => void
   onMoveTerminalNode?: (terminalNodeId: string, position: { x: number; y: number }) => void
   onDeleteTerminalNode?: (terminalNodeId: string) => void
+  onCreateTerminalBranch?: (sourceTerminalNodeId: string, position?: { x: number; y: number }) => void
   onRenameSession?: (sessionId: string, name: string) => void
   onResumeTerminalNode?: (terminalNodeId: string) => void
 } & Record<string, unknown>
@@ -111,6 +112,18 @@ export default function TerminalNode({ data, selected }: NodeProps<TerminalFlowN
     setIsEditingTitle(false)
   }, [data.title])
 
+  const handleCreateBranch = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      event.preventDefault()
+      event.stopPropagation()
+      data.onCreateTerminalBranch?.(data.terminalNodeId, {
+        x: data.position.x + 120,
+        y: data.position.y + 96,
+      })
+    },
+    [data],
+  )
+
   return (
     <div
       className={`relative h-full w-full rounded-2xl border shadow-lg transition-shadow ${selected ? 'shadow-[0_0_0_2px_var(--accent-command)]' : 'shadow-black/5'}`}
@@ -175,7 +188,11 @@ export default function TerminalNode({ data, selected }: NodeProps<TerminalFlowN
           </div>
         </>
       )}
-      <Handle type="target" position={Position.Left} className="!h-3 !w-3 !bg-[var(--accent-command)]" />
+      <Handle
+        type="target"
+        position={Position.Left}
+        className="!h-6 !w-6 !border-2 !border-white !bg-[var(--accent-command)] !shadow-md"
+      />
       <header className="flex items-start justify-between gap-3 border-b px-3 py-2" style={{ borderColor: 'var(--border-subtle)' }}>
         <div className="flex min-w-0 items-start gap-3">
           <div className="flex items-center gap-1.5 pt-0.5">
@@ -242,6 +259,15 @@ export default function TerminalNode({ data, selected }: NodeProps<TerminalFlowN
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="nodrag nopan rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition-colors hover:bg-[var(--accent-command-soft)]"
+            style={{ borderColor: 'var(--border-subtle)', color: 'var(--accent-command)' }}
+            onClick={handleCreateBranch}
+            title="Create child terminal"
+          >
+            branch
+          </button>
           {isLive ? (
             <span
               className="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
@@ -292,7 +318,11 @@ export default function TerminalNode({ data, selected }: NodeProps<TerminalFlowN
           {snapshotLines.length > 0 ? snapshotLines.join('\n') : 'No snapshot yet'}
         </pre>
       )}
-      <Handle type="source" position={Position.Right} className="!h-3 !w-3 !bg-[var(--accent-command)]" />
+      <Handle
+        type="source"
+        position={Position.Right}
+        className="!h-6 !w-6 !border-2 !border-white !bg-[var(--accent-command)] !shadow-md"
+      />
     </div>
   )
 }

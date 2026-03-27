@@ -38,6 +38,56 @@ pnpm dev:server
 pnpm dev:client
 ```
 
+## After Install
+
+After `pnpm install`, the repo is usually ready to run immediately. A few configuration points are worth checking before first launch:
+
+1. `node-pty` helper repair on macOS
+
+   During install, the root `postinstall` script runs:
+
+   ```bash
+   node scripts/fix-node-pty-permissions.mjs
+   ```
+
+   This repairs the macOS `node-pty` `spawn-helper` executable bit if a local install produced incorrect permissions. In a healthy install you do not need to do anything manually.
+
+   If your package manager skips lifecycle scripts, you can run it yourself:
+
+   ```bash
+   node scripts/fix-node-pty-permissions.mjs
+   ```
+
+2. Choose the default working directory
+
+   By default, new terminal sessions start in the repository root. If you want sessions to start somewhere else, set `DEFAULT_CWD` before starting the server:
+
+   ```bash
+   DEFAULT_CWD=$HOME/projects pnpm dev:server
+   ```
+
+3. Choose the shell used for PTY sessions
+
+   By default, the server uses your environment `SHELL`. If you want to force a specific shell:
+
+   ```bash
+   SHELL=/bin/zsh pnpm dev:server
+   ```
+
+4. If the client and server run on different origins, set the WebSocket URL explicitly
+
+   In normal local development, the Vite client proxies `/ws` to the backend automatically, so no extra client configuration is needed.
+
+   If you run the frontend from a different host or port than the backend proxy expects, set `VITE_WS_URL`:
+
+   ```bash
+   VITE_WS_URL=ws://localhost:3001/ws pnpm dev:client
+   ```
+
+5. Restart after config changes
+
+   If you change `PORT`, `CLIENT_ORIGIN`, `DEFAULT_CWD`, `SHELL`, or `VITE_WS_URL`, restart the affected dev server so the new values take effect.
+
 ## Requirements
 
 - Node.js 22+
@@ -56,6 +106,8 @@ If `pnpm install` fails while building native modules, verify the compiler toolc
 
 ## Configuration
 
+### Server
+
 The server supports these environment variables:
 
 | Variable        | Default                             | Purpose                                                      |
@@ -72,7 +124,75 @@ Example:
 PORT=4001 CLIENT_ORIGIN=http://localhost:4173 DEFAULT_CWD=$HOME/projects pnpm dev:server
 ```
 
+### Client
+
+The client supports this optional environment variable:
+
+| Variable      | Default                    | Purpose                                                                 |
+| ------------- | -------------------------- | ----------------------------------------------------------------------- |
+| `VITE_WS_URL` | derived from browser origin | Explicit WebSocket endpoint, useful when the frontend is not using the local Vite `/ws` proxy |
+
+Example:
+
+```bash
+VITE_WS_URL=ws://localhost:3001/ws pnpm dev:client
+```
+
 The SQLite database is stored locally as `mindmap.db` in the project working directory.
+
+## Deploying To Cloudflare Pages
+
+For the browser-only WASM demo, Cloudflare Pages is a good fit because it can serve the required cross-origin isolation headers for `@wasmer/sdk`.
+
+This repo is already prepared for that deployment:
+
+- [`packages/client/public/_headers`](packages/client/public/_headers) adds:
+  - `Cross-Origin-Opener-Policy: same-origin`
+  - `Cross-Origin-Embedder-Policy: require-corp`
+- [`packages/client/public/_redirects`](packages/client/public/_redirects) maps `/demo` to `/demo.html`
+
+### Cloudflare Pages Settings
+
+Use these settings in Cloudflare Pages:
+
+- Framework preset: `None`
+- Root directory: repository root
+- Build command: `pnpm --filter @mindmap/client build`
+- Build output directory: `packages/client/dist`
+
+### What Gets Deployed
+
+The client build emits two entry pages:
+
+- `/index.html` → main app, which still expects the backend websocket
+- `/demo.html` → browser-only WASM demo
+- `/demo` → friendlier route to the WASM demo via `_redirects`
+
+If you want a frontend-only deployment without the backend, use `/demo`.
+
+### First Deploy Checklist
+
+1. Connect the repository to Cloudflare Pages.
+2. Set the build command to:
+
+   ```bash
+   pnpm --filter @mindmap/client build
+   ```
+
+3. Set the output directory to:
+
+   ```text
+   packages/client/dist
+   ```
+
+4. Deploy.
+5. Open `/demo` on your Pages domain.
+
+### Notes
+
+- The first time a user starts the WASM shell, the browser downloads bash from the Wasmer registry.
+- The main app at `/` is not backend-free. If you deploy only the frontend, prefer sharing `/demo`.
+- If you later deploy the main app as well, build with `VITE_WS_URL=wss://your-backend-domain/ws`.
 
 ## Development
 
