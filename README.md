@@ -149,7 +149,7 @@ This repo is already prepared for that deployment:
 - [`packages/client/public/_headers`](packages/client/public/_headers) adds:
   - `Cross-Origin-Opener-Policy: same-origin`
   - `Cross-Origin-Embedder-Policy: require-corp`
-- [`packages/client/public/_redirects`](packages/client/public/_redirects) maps `/demo` to `/demo.html`
+- [`packages/client/public/_redirects`](packages/client/public/_redirects) maps `/demo` to `/demo.html` and redirects `/` to `/demo` on Cloudflare Pages
 
 ### Cloudflare Pages Settings
 
@@ -168,7 +168,7 @@ The client build emits two entry pages:
 - `/demo.html` → browser-only WASM demo
 - `/demo` → friendlier route to the WASM demo via `_redirects`
 
-If you want a frontend-only deployment without the backend, use `/demo`.
+For a frontend-only Cloudflare Pages deployment, `/` redirects to `/demo`, so the hosted site opens the WASM demo instead of the websocket app.
 
 ### First Deploy Checklist
 
@@ -186,13 +186,15 @@ If you want a frontend-only deployment without the backend, use `/demo`.
    ```
 
 4. Deploy.
-5. Open `/demo` on your Pages domain.
+5. Open `/` on your Pages domain. It redirects to `/demo`.
 
 ### Notes
 
 - The first time a user starts the WASM shell, the browser downloads bash from the Wasmer registry.
-- The main app at `/` is not backend-free. If you deploy only the frontend, prefer sharing `/demo`.
+- Local development still keeps the full app at `/` because the `_redirects` rule only affects the built Cloudflare Pages deployment.
+- The main app at `/` is not backend-free. On a static host, use `/demo` unless you deploy the backend separately.
 - If you later deploy the main app as well, build with `VITE_WS_URL=wss://your-backend-domain/ws`.
+- Cloudflare Pages itself does not host the Node.js PTY backend from `packages/server`, so `wss://your-pages-domain/ws` will fail unless you provide a separate backend and point `VITE_WS_URL` at it.
 
 ## Development
 
