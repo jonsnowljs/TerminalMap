@@ -11,6 +11,10 @@ export interface CompletedCommand {
   timestamp: number;
 }
 
+interface UseWasmShellOptions {
+  onWorkingDirectoryChange?: (cwd: string) => void;
+}
+
 /**
  * Drives a real bash process compiled to WASM via @wasmer/sdk.
  *
@@ -27,7 +31,9 @@ export interface CompletedCommand {
 export function useWasmShell(
   termRef: React.MutableRefObject<Terminal | null>,
   onCommandComplete: (cmd: CompletedCommand) => void,
+  options: UseWasmShellOptions = {},
 ) {
+  const onWorkingDirectoryChange = options.onWorkingDirectoryChange;
   const [status, setStatus] = useState<ShellStatus>('idle');
   const [error, setError] = useState<string | null>(null);
 
@@ -83,6 +89,8 @@ export function useWasmShell(
                 });
                 activeCommandRef.current = null;
               }
+            } else if (body.startsWith('633;P;')) {
+              onWorkingDirectoryChange?.(body.slice('633;P;'.length));
             }
             // OSC 133;A, B, C — swallow silently
           }
@@ -109,7 +117,7 @@ export function useWasmShell(
         }
       }
     },
-    [onCommandComplete],
+    [onCommandComplete, onWorkingDirectoryChange],
   );
 
   const startShell = useCallback(async () => {
@@ -149,7 +157,7 @@ export function useWasmShell(
       //  PROMPT_COMMAND emits OSC 133;D;$? (command-end + exit code) before each prompt
       //  PS1 wraps the visible prompt text with OSC 133;A / 133;B markers
       const setup = [
-        `PROMPT_COMMAND='printf "\\033]133;D;$?\\007"'`,
+        `PROMPT_COMMAND='printf "\\033]133;D;$?\\007\\033]633;P;%s\\007" "$PWD"'`,
         `PS1='\\[\\033]133;A\\007\\]\\[\\033[32m\\]$ \\[\\033[0m\\]\\[\\033]133;B\\007\\]'`,
         'clear',
         '',

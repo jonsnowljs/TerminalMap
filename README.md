@@ -74,11 +74,17 @@ After `pnpm install`, the repo is usually ready to run immediately. A few config
    SHELL=/bin/zsh pnpm dev:server
    ```
 
-4. If the client and server run on different origins, set the WebSocket URL explicitly
+4. Choose the terminal backend the client should use
 
-   In normal local development, the Vite client proxies `/ws` to the backend automatically, so no extra client configuration is needed.
+   In normal local development, the Vite client uses the websocket backend and proxies `/ws` to the server automatically.
 
-   If you run the frontend from a different host or port than the backend proxy expects, set `VITE_WS_URL`:
+   If you want the browser-only WASM terminal instead of the backend websocket app, set:
+
+   ```bash
+   VITE_TERMINAL_BACKEND=wasm pnpm dev:client
+   ```
+
+   If you run the websocket frontend from a different host or port than the backend proxy expects, set `VITE_WS_URL`:
 
    ```bash
    VITE_WS_URL=ws://localhost:3001/ws pnpm dev:client
@@ -86,7 +92,7 @@ After `pnpm install`, the repo is usually ready to run immediately. A few config
 
 5. Restart after config changes
 
-   If you change `PORT`, `CLIENT_ORIGIN`, `DEFAULT_CWD`, `SHELL`, or `VITE_WS_URL`, restart the affected dev server so the new values take effect.
+   If you change `PORT`, `CLIENT_ORIGIN`, `DEFAULT_CWD`, `SHELL`, `VITE_WS_URL`, or `VITE_TERMINAL_BACKEND`, restart the affected dev server so the new values take effect.
 
 ## Requirements
 
@@ -126,11 +132,12 @@ PORT=4001 CLIENT_ORIGIN=http://localhost:4173 DEFAULT_CWD=$HOME/projects pnpm de
 
 ### Client
 
-The client supports this optional environment variable:
+The client supports these optional environment variables:
 
-| Variable      | Default                    | Purpose                                                                 |
-| ------------- | -------------------------- | ----------------------------------------------------------------------- |
-| `VITE_WS_URL` | derived from browser origin | Explicit WebSocket endpoint, useful when the frontend is not using the local Vite `/ws` proxy |
+| Variable                | Default                     | Purpose                                                                 |
+| ----------------------- | --------------------------- | ----------------------------------------------------------------------- |
+| `VITE_WS_URL`           | derived from browser origin | Explicit WebSocket endpoint, useful when the frontend is not using the local Vite `/ws` proxy |
+| `VITE_TERMINAL_BACKEND` | `ws` locally, `wasm` on Pages builds without `VITE_WS_URL` | Select the root app transport: websocket backend (`ws`) or in-browser Wasmer shell (`wasm`) |
 
 Example:
 
@@ -138,11 +145,15 @@ Example:
 VITE_WS_URL=ws://localhost:3001/ws pnpm dev:client
 ```
 
+```bash
+VITE_TERMINAL_BACKEND=wasm pnpm dev:client
+```
+
 The SQLite database is stored locally as `mindmap.db` in the project working directory.
 
 ## Deploying To Cloudflare Pages
 
-For the browser-only WASM demo, Cloudflare Pages is a good fit because it can serve the required cross-origin isolation headers for `@wasmer/sdk`.
+Cloudflare Pages is a good fit for the browser-backed WASM shell because it can serve the required cross-origin isolation headers for `@wasmer/sdk`.
 
 This repo is already prepared for that deployment:
 
@@ -164,11 +175,11 @@ Use these settings in Cloudflare Pages:
 
 The client build emits two entry pages:
 
-- `/index.html` → main app, which still expects the backend websocket
+- `/index.html` → root client entry
 - `/demo.html` → browser-only WASM demo
 - `/demo` → friendlier route to the WASM demo via `_redirects`
 
-For a frontend-only Cloudflare Pages deployment without `VITE_WS_URL`, the root entry now boots the WASM demo automatically. Local development still keeps the websocket app at `/`.
+For a frontend-only Cloudflare Pages deployment without `VITE_WS_URL`, the root entry boots the main client shell in `wasm` mode. Local development still keeps the websocket app at `/` by default.
 
 ### First Deploy Checklist
 
@@ -186,14 +197,14 @@ For a frontend-only Cloudflare Pages deployment without `VITE_WS_URL`, the root 
    ```
 
 4. Deploy.
-5. Open `/` on your Pages domain for the WASM demo, or `/demo` for the explicit demo route.
+5. Open `/` on your Pages domain for the browser-backed client, or `/demo` for the stripped-down demo page.
 
 ### Notes
 
 - The first time a user starts the WASM shell, the browser downloads bash from the Wasmer registry.
-- Cloudflare Pages sets `CF_PAGES=1` during builds, and this repo uses that to render the WASM demo at `/` unless `VITE_WS_URL` is provided for a real backend.
-- The main app at `/` is not backend-free unless you deploy the backend separately and build with `VITE_WS_URL=wss://your-backend-domain/ws`.
-- If you later deploy the main app as well, build with `VITE_WS_URL=wss://your-backend-domain/ws`.
+- Cloudflare Pages sets `CF_PAGES=1` during builds, and this repo uses that to default the root client to `wasm` mode unless `VITE_WS_URL` is provided for a real backend.
+- If you want to force the browser shell in any environment, set `VITE_TERMINAL_BACKEND=wasm`.
+- If you later deploy the websocket-backed app as well, set `VITE_WS_URL=wss://your-backend-domain/ws` or explicitly set `VITE_TERMINAL_BACKEND=ws`.
 - Cloudflare Pages itself does not host the Node.js PTY backend from `packages/server`, so `wss://your-pages-domain/ws` will fail unless you provide a separate backend and point `VITE_WS_URL` at it.
 
 ## Development

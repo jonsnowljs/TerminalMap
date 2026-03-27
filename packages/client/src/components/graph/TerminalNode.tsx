@@ -195,27 +195,29 @@ export default function TerminalNode({ data, selected }: NodeProps<TerminalFlowN
       />
       <header className="flex items-start justify-between gap-3 border-b px-3 py-2" style={{ borderColor: 'var(--border-subtle)' }}>
         <div className="flex min-w-0 items-start gap-3">
-          <div className="flex items-center gap-1.5 pt-0.5">
-            <button
-              type="button"
-              aria-label="Delete terminal"
-              title="Delete terminal"
-              className="nodrag nopan group relative flex h-3.5 w-3.5 items-center justify-center rounded-full border border-[#d04f45] bg-[#ff5f57] transition-transform hover:scale-105"
-              onClick={(event) => {
-                event.preventDefault()
-                event.stopPropagation()
-                data.onDeleteTerminalNode?.(data.terminalNodeId)
-              }}
-            >
-              <span
-                aria-hidden="true"
-                className="pointer-events-none absolute inset-0 flex items-center justify-center text-[9px] leading-none text-[#7a1d17] opacity-0 transition-opacity group-hover:opacity-100"
-                style={{ transform: 'translateY(-0.25px)' }}
+          {data.onDeleteTerminalNode ? (
+            <div className="flex items-center gap-1.5 pt-0.5">
+              <button
+                type="button"
+                aria-label="Delete terminal"
+                title="Delete terminal"
+                className="nodrag nopan group relative flex h-3.5 w-3.5 items-center justify-center rounded-full border border-[#d04f45] bg-[#ff5f57] transition-transform hover:scale-105"
+                onClick={(event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  data.onDeleteTerminalNode?.(data.terminalNodeId)
+                }}
               >
-                ×
-              </span>
-            </button>
-          </div>
+                <span
+                  aria-hidden="true"
+                  className="pointer-events-none absolute inset-0 flex items-center justify-center text-[9px] leading-none text-[#7a1d17] opacity-0 transition-opacity group-hover:opacity-100"
+                  style={{ transform: 'translateY(-0.25px)' }}
+                >
+                  ×
+                </span>
+              </button>
+            </div>
+          ) : null}
           <div className="min-w-0">
             {isEditingTitle ? (
               <input
@@ -246,11 +248,11 @@ export default function TerminalNode({ data, selected }: NodeProps<TerminalFlowN
                 onDoubleClick={(event) => {
                   event.preventDefault()
                   event.stopPropagation()
-                  if (data.sessionId) {
+                  if (data.sessionId && data.onRenameSession) {
                     setIsEditingTitle(true)
                   }
                 }}
-                title={data.sessionId ? 'Double-click to rename session' : data.title}
+                title={data.sessionId && data.onRenameSession ? 'Double-click to rename session' : data.title}
               >
                 {data.title}
               </button>
@@ -259,15 +261,17 @@ export default function TerminalNode({ data, selected }: NodeProps<TerminalFlowN
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            className="nodrag nopan rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition-colors hover:bg-[var(--accent-command-soft)]"
-            style={{ borderColor: 'var(--border-subtle)', color: 'var(--accent-command)' }}
-            onClick={handleCreateBranch}
-            title="Create child terminal"
-          >
-            branch
-          </button>
+          {data.onCreateTerminalBranch ? (
+            <button
+              type="button"
+              className="nodrag nopan rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition-colors hover:bg-[var(--accent-command-soft)]"
+              style={{ borderColor: 'var(--border-subtle)', color: 'var(--accent-command)' }}
+              onClick={handleCreateBranch}
+              title="Create child terminal"
+            >
+              branch
+            </button>
+          ) : null}
           {isLive ? (
             <span
               className="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
@@ -278,7 +282,7 @@ export default function TerminalNode({ data, selected }: NodeProps<TerminalFlowN
             >
               live
             </span>
-          ) : (
+          ) : data.onResumeTerminalNode ? (
             <button
               type="button"
               className="rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition-colors hover:bg-[var(--panel-muted)]"
@@ -291,7 +295,7 @@ export default function TerminalNode({ data, selected }: NodeProps<TerminalFlowN
             >
               resume
             </button>
-          )}
+          ) : null}
         </div>
       </header>
 
