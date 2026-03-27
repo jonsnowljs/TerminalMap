@@ -5,20 +5,33 @@ import { CommandDetector } from './CommandDetector.js';
 
 export interface ManagedSession {
   id: string;
+  workspaceId: string;
   pty: pty.IPty;
   commandDetector: CommandDetector;
   attachedClients: Set<WebSocket>;
   cols: number;
   rows: number;
   cwd: string;
+  shell: string;
+  env: Record<string, string>;
   branchId: string;
+  activeTerminalNodeId: string | null;
+  lastCommand: string | null;
+  recentOutput: string;
   nodeSeqCounter: number;
   lastNodeId: string | null;
+}
+
+export interface WorkspaceAttachment {
+  workspaceId: string;
+  terminalNodeId: string;
+  sessionId: string;
 }
 
 export interface CreateSessionOpts {
   sessionId: string;
   branchId: string;
+  workspaceId: string;
   shell?: string;
   cwd?: string;
   cols: number;
@@ -27,6 +40,8 @@ export interface CreateSessionOpts {
 
 export class SessionManager {
   private sessions = new Map<string, ManagedSession>();
+  private attachmentsByTerminalNode = new Map<string, WorkspaceAttachment>();
+  private static readonly MAX_RECENT_OUTPUT_BYTES = 64 * 1024;
 
   create(opts: CreateSessionOpts): ManagedSession {
     const shell = opts.shell || config.defaultShell;
@@ -36,6 +51,11 @@ export class SessionManager {
     const env: Record<string, string> = {};
     for (const [key, val] of Object.entries(process.env)) {
       if (val !== undefined) env[key] = val;
+    }
+    env.TERM = 'xterm-256color';
+    env.COLORTERM = 'truecolor';
+    if (!env.LANG) {
+      env.LANG = 'C.UTF-8';
     }
 
     const ptyProcess = pty.spawn(shell, [], {
@@ -48,16 +68,29 @@ export class SessionManager {
 
     const session: ManagedSession = {
       id: opts.sessionId,
+      workspaceId: opts.workspaceId,
       pty: ptyProcess,
       commandDetector: new CommandDetector(),
       attachedClients: new Set(),
       cols: opts.cols,
       rows: opts.rows,
       cwd,
+      shell,
+      env,
       branchId: opts.branchId,
+      activeTerminalNodeId: null,
+      lastCommand: null,
+      recentOutput: '',
       nodeSeqCounter: 0,
       lastNodeId: null,
     };
+
+    ptyProcess.onData((data: string) => {
+      const next = session.recentOutput + data;
+      session.recentOutput = next.length > SessionManager.MAX_RECENT_OUTPUT_BYTES
+        ? next.slice(-SessionManager.MAX_RECENT_OUTPUT_BYTES)
+        : next;
+    });
 
     this.sessions.set(opts.sessionId, session);
     return session;
@@ -65,6 +98,14 @@ export class SessionManager {
 
   get(sessionId: string): ManagedSession | undefined {
     return this.sessions.get(sessionId);
+  }
+
+  bindTerminalNode(sessionId: string, workspaceId: string, terminalNodeId: string): ManagedSession | undefined {
+    const session = this.sessions.get(sessionId);
+    if (!session) return undefined;
+    session.workspaceId = workspaceId;
+    session.activeTerminalNodeId = terminalNodeId;
+    return session;
   }
 
   attach(sessionId: string, ws: WebSocket): ManagedSession | undefined {
@@ -75,10 +116,28 @@ export class SessionManager {
     return session;
   }
 
+  attachTerminalNode(workspaceId: string, terminalNodeId: string, sessionId: string, ws: WebSocket): ManagedSession | undefined {
+    const session = this.sessions.get(sessionId);
+    if (!session) return undefined;
+
+    session.attachedClients.add(ws);
+    session.workspaceId = workspaceId;
+    session.activeTerminalNodeId = terminalNodeId;
+    this.attachmentsByTerminalNode.set(terminalNodeId, { workspaceId, terminalNodeId, sessionId });
+    return session;
+  }
+
   detach(sessionId: string, ws: WebSocket): void {
     const session = this.sessions.get(sessionId);
     if (session) {
       session.attachedClients.delete(ws);
+      if (session.attachedClients.size === 0) {
+        for (const [terminalNodeId, attachment] of this.attachmentsByTerminalNode.entries()) {
+          if (attachment.sessionId === sessionId) {
+            this.attachmentsByTerminalNode.delete(terminalNodeId);
+          }
+        }
+      }
     }
   }
 
@@ -86,6 +145,47 @@ export class SessionManager {
     for (const session of this.sessions.values()) {
       session.attachedClients.delete(ws);
     }
+    for (const [terminalNodeId, attachment] of this.attachmentsByTerminalNode.entries()) {
+      const session = this.sessions.get(attachment.sessionId);
+      if (!session || session.attachedClients.size === 0) {
+        this.attachmentsByTerminalNode.delete(terminalNodeId);
+      }
+    }
+  }
+
+  detachTerminalNode(workspaceId: string, terminalNodeId: string, ws: WebSocket): void {
+    const attachment = this.attachmentsByTerminalNode.get(terminalNodeId);
+    const session = attachment ? this.sessions.get(attachment.sessionId) : undefined;
+    if (!attachment || attachment.workspaceId !== workspaceId || !session) {
+      return;
+    }
+
+    session.attachedClients.delete(ws);
+    if (session.attachedClients.size === 0) {
+      this.attachmentsByTerminalNode.delete(terminalNodeId);
+    }
+  }
+
+  getActiveTerminalNode(workspaceId: string): string | null {
+    for (const attachment of this.attachmentsByTerminalNode.values()) {
+      if (attachment.workspaceId === workspaceId) {
+        return attachment.terminalNodeId;
+      }
+    }
+    return null;
+  }
+
+  getWorkspaceAttachment(workspaceId: string): WorkspaceAttachment | undefined {
+    for (const attachment of this.attachmentsByTerminalNode.values()) {
+      if (attachment.workspaceId === workspaceId) {
+        return attachment;
+      }
+    }
+    return undefined;
+  }
+
+  getTerminalAttachment(terminalNodeId: string): WorkspaceAttachment | undefined {
+    return this.attachmentsByTerminalNode.get(terminalNodeId);
   }
 
   write(sessionId: string, data: string): void {
@@ -110,6 +210,12 @@ export class SessionManager {
     const session = this.sessions.get(sessionId);
     if (session) {
       session.pty.kill();
+      for (const [terminalNodeId, attachment] of this.attachmentsByTerminalNode.entries()) {
+        if (attachment.sessionId === sessionId) {
+          this.attachmentsByTerminalNode.delete(terminalNodeId);
+        }
+      }
+      session.activeTerminalNodeId = null;
       this.sessions.delete(sessionId);
     }
   }
@@ -123,5 +229,6 @@ export class SessionManager {
       session.pty.kill();
     }
     this.sessions.clear();
+    this.attachmentsByTerminalNode.clear();
   }
 }

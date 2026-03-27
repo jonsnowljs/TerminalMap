@@ -1,29 +1,32 @@
 import { memo } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import type { NodeProps } from '@xyflow/react';
-import type { MindmapNodeData } from '../../store/graphStore.js';
+import type { MindmapFlowNode } from '../../store/graphStore.js';
 
-const ErrorNode = memo(({ data, selected }: NodeProps<MindmapNodeData>) => {
+const ErrorNode = memo(({ data, selected }: NodeProps<MindmapFlowNode>) => {
   const node = data.graphNode;
   const preview = node.content.split('\n').slice(0, 3).join('\n');
 
   return (
     <div
-      className={`px-3 py-2 rounded-lg border-2 min-w-[200px] max-w-[320px] ${
-        selected ? 'border-red-500 shadow-lg shadow-red-500/20' : 'border-red-800'
-      } bg-red-950/30`}
+      className="min-w-[200px] max-w-[320px] rounded-xl border px-3 py-2"
+      style={{
+        borderColor: selected ? 'var(--accent-error)' : '#e7c4c4',
+        backgroundColor: 'var(--accent-error-soft)',
+        boxShadow: selected ? '0 10px 30px rgba(197, 83, 83, 0.14)' : undefined,
+      }}
     >
-      <Handle type="target" position={Position.Top} className="!bg-red-500 !w-2 !h-2" />
+      <Handle type="target" position={Position.Top} className="!h-2 !w-2 !bg-[var(--accent-error)]" />
       <div className="flex items-center gap-2 mb-1">
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-red-400">error</span>
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--accent-error)]">error</span>
         {node.exitCode !== null && (
-          <span className="text-[10px] px-1.5 rounded bg-red-900 text-red-300">exit {node.exitCode}</span>
+          <span className="rounded bg-rose-100 px-1.5 text-[10px] text-rose-700">exit {node.exitCode}</span>
         )}
       </div>
-      <pre className="font-mono text-xs text-red-300/70 whitespace-pre-wrap truncate max-h-[60px] overflow-hidden">
+      <pre className="max-h-[60px] overflow-hidden truncate whitespace-pre-wrap font-mono text-xs text-rose-800/80">
         {preview}
       </pre>
-      <Handle type="source" position={Position.Bottom} className="!bg-red-500 !w-2 !h-2" />
+      <Handle type="source" position={Position.Bottom} className="!h-2 !w-2 !bg-[var(--accent-error)]" />
     </div>
   );
 });

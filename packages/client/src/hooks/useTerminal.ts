@@ -1,59 +1,95 @@
-import { useRef, useEffect } from 'react';
-import { Terminal } from '@xterm/xterm';
-import { FitAddon } from '@xterm/addon-fit';
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Terminal } from '@xterm/xterm'
+import { FitAddon } from '@xterm/addon-fit'
 
-export function useTerminal(containerRef: React.RefObject<HTMLDivElement | null>) {
-  const termRef = useRef<Terminal | null>(null);
-  const fitAddonRef = useRef<FitAddon | null>(null);
+export function useTerminal() {
+  const termRef = useRef<Terminal | null>(null)
+  const fitAddonRef = useRef<FitAddon | null>(null)
+  const resizeObserverRef = useRef<ResizeObserver | null>(null)
+  const mountedContainerRef = useRef<HTMLDivElement | null>(null)
+  const [mountVersion, setMountVersion] = useState(0)
 
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-
+  const createTerminal = useCallback(() => {
     const term = new Terminal({
       cursorBlink: true,
       fontSize: 14,
       fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace",
       theme: {
-        background: '#0a0a0f',
-        foreground: '#e4e4e7',
-        cursor: '#a78bfa',
-        selectionBackground: '#7c3aed44',
+        background: '#1d1b19',
+        foreground: '#f4efe7',
+        cursor: '#7e95ab',
+        selectionBackground: '#556f8a4d',
       },
       allowProposedApi: true,
-    });
+    })
 
-    const fitAddon = new FitAddon();
-    term.loadAddon(fitAddon);
-    term.open(container);
+    const fitAddon = new FitAddon()
+    term.loadAddon(fitAddon)
+    termRef.current = term
+    fitAddonRef.current = fitAddon
+    return term
+  }, [])
 
-    // Fit after a small delay to ensure container is sized
-    requestAnimationFrame(() => {
-      fitAddon.fit();
-    });
+  const disposeTerminal = useCallback(() => {
+    resizeObserverRef.current?.disconnect()
+    resizeObserverRef.current = null
+    termRef.current?.dispose()
+    termRef.current = null
+    fitAddonRef.current = null
+    mountedContainerRef.current = null
+  }, [])
 
-    termRef.current = term;
-    fitAddonRef.current = fitAddon;
+  const ensureTerminal = useCallback(() => {
+    if (!termRef.current) {
+      return createTerminal()
+    }
 
-    // Handle window resize
-    const resizeObserver = new ResizeObserver(() => {
-      requestAnimationFrame(() => fitAddon.fit());
-    });
-    resizeObserver.observe(container);
+    return termRef.current
+  }, [createTerminal])
 
-    return () => {
-      resizeObserver.disconnect();
-      term.dispose();
-      termRef.current = null;
-      fitAddonRef.current = null;
-    };
-  }, [containerRef]);
+  const mount = useCallback(
+    (container: HTMLDivElement | null) => {
+      if (!container) return
 
-  const fit = () => fitAddonRef.current?.fit();
-  const getSize = () => {
-    const term = termRef.current;
-    return term ? { cols: term.cols, rows: term.rows } : { cols: 80, rows: 24 };
-  };
+      const shouldRecreateTerminal = mountedContainerRef.current !== null && mountedContainerRef.current !== container
+      if (shouldRecreateTerminal) {
+        disposeTerminal()
+      }
 
-  return { termRef, fit, getSize };
+      const term = ensureTerminal()
+      if (!term) return
+
+      resizeObserverRef.current?.disconnect()
+      container.replaceChildren()
+      term.open(container)
+      mountedContainerRef.current = container
+      requestAnimationFrame(() => fitAddonRef.current?.fit())
+
+      const resizeObserver = new ResizeObserver(() => {
+        requestAnimationFrame(() => fitAddonRef.current?.fit())
+      })
+      resizeObserver.observe(container)
+      resizeObserverRef.current = resizeObserver
+      setMountVersion((version) => version + 1)
+    },
+    [disposeTerminal, ensureTerminal],
+  )
+
+  const fit = useCallback(() => {
+    fitAddonRef.current?.fit()
+  }, [])
+
+  const getSize = useCallback(() => {
+    const term = termRef.current
+    return term ? { cols: term.cols, rows: term.rows } : { cols: 80, rows: 24 }
+  }, [])
+
+  useEffect(
+    () => () => {
+      disposeTerminal()
+    },
+    [disposeTerminal],
+  )
+
+  return { termRef, mount, fit, getSize, mountVersion }
 }

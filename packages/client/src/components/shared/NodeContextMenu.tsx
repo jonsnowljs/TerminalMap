@@ -1,18 +1,27 @@
+import type { PendingBranchAction } from '../../store/graphStore.js';
 import { useCallback } from 'react';
 
 interface NodeContextMenuProps {
   x: number;
   y: number;
   nodeId: string;
-  onBranch: (nodeId: string) => void;
+  onCreateWorkspaceBranch: (nodeId: string, creationMode: PendingBranchAction['creationMode']) => void;
+  onCreateChildTerminal?: (nodeId: string) => void;
   onClose: () => void;
 }
 
-export default function NodeContextMenu({ x, y, nodeId, onBranch, onClose }: NodeContextMenuProps) {
-  const handleBranch = useCallback(() => {
-    onBranch(nodeId);
+export default function NodeContextMenu({
+  x,
+  y,
+  nodeId,
+  onCreateWorkspaceBranch,
+  onCreateChildTerminal,
+  onClose,
+}: NodeContextMenuProps) {
+  const handleBranch = useCallback((creationMode: PendingBranchAction['creationMode']) => {
+    onCreateWorkspaceBranch(nodeId, creationMode);
     onClose();
-  }, [nodeId, onBranch, onClose]);
+  }, [nodeId, onCreateWorkspaceBranch, onClose]);
 
   return (
     <>
@@ -20,14 +29,34 @@ export default function NodeContextMenu({ x, y, nodeId, onBranch, onClose }: Nod
       <div className="fixed inset-0 z-40" onClick={onClose} />
       {/* Menu */}
       <div
-        className="fixed z-50 bg-gray-900 border border-gray-700 rounded-lg shadow-xl py-1 min-w-[180px]"
-        style={{ left: x, top: y }}
+        className="fixed z-50 min-w-[180px] rounded-xl border py-1 shadow-xl"
+        style={{
+          left: x,
+          top: y,
+          backgroundColor: 'var(--panel-bg)',
+          borderColor: 'var(--border-subtle)',
+        }}
       >
         <button
-          onClick={handleBranch}
-          className="w-full text-left px-4 py-2 text-sm text-gray-200 hover:bg-purple-900/50 hover:text-purple-300 transition-colors"
+          onClick={() => {
+            onCreateChildTerminal?.(nodeId);
+            onClose();
+          }}
+          className="w-full px-4 py-2 text-left text-sm text-[var(--text-strong)] transition-colors hover:bg-[var(--accent-command-soft)] hover:text-[var(--accent-command)]"
         >
-          Branch from here
+          Explore This Option in Child Terminal
+        </button>
+        <button
+          onClick={() => handleBranch('clone_live_terminal')}
+          className="w-full px-4 py-2 text-left text-sm text-[var(--text-strong)] transition-colors hover:bg-[var(--accent-command-soft)] hover:text-[var(--accent-command)]"
+        >
+          Create Child Mindmap from Live Terminal
+        </button>
+        <button
+          onClick={() => handleBranch('new_from_node_context')}
+          className="w-full px-4 py-2 text-left text-sm text-[var(--text-strong)] transition-colors hover:bg-[var(--accent-command-soft)] hover:text-[var(--accent-command)]"
+        >
+          Create Child Mindmap from This Node
         </button>
       </div>
     </>

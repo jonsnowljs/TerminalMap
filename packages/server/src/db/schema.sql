@@ -2,6 +2,10 @@ CREATE TABLE IF NOT EXISTS workspaces (
   id          TEXT PRIMARY KEY,
   name        TEXT NOT NULL,
   cwd         TEXT NOT NULL,
+  parent_workspace_id TEXT REFERENCES workspaces(id) ON DELETE SET NULL,
+  created_from_node_id TEXT,
+  root_terminal_node_id TEXT,
+  active_terminal_node_id TEXT,
   created_at  TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -60,6 +64,50 @@ CREATE TABLE IF NOT EXISTS edges (
 );
 CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id);
 CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id);
+
+CREATE TABLE IF NOT EXISTS workspace_terminal_nodes (
+  terminal_node_id TEXT PRIMARY KEY,
+  workspace_id   TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  session_id     TEXT REFERENCES sessions(id) ON DELETE SET NULL,
+  title          TEXT NOT NULL,
+  source_node_id TEXT,
+  x              REAL NOT NULL DEFAULT 0,
+  y              REAL NOT NULL DEFAULT 0,
+  width          REAL NOT NULL DEFAULT 960,
+  height         REAL NOT NULL DEFAULT 540,
+  mode           TEXT NOT NULL CHECK(mode IN ('active','snapshot')),
+  status         TEXT NOT NULL CHECK(status IN ('idle','running','exited','disconnected')),
+  snapshot_json  TEXT,
+  scrollback_text TEXT,
+  restore_state_json TEXT,
+  created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_workspace_terminal_nodes_workspace ON workspace_terminal_nodes(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_workspace_terminal_nodes_session ON workspace_terminal_nodes(session_id);
+
+CREATE TABLE IF NOT EXISTS workspace_links (
+  id                 TEXT PRIMARY KEY,
+  source_workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  source_node_id      TEXT NOT NULL,
+  target_workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  creation_mode       TEXT NOT NULL CHECK(creation_mode IN ('clone_live_terminal','new_from_node_context')),
+  created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_workspace_links_source_workspace ON workspace_links(source_workspace_id);
+CREATE INDEX IF NOT EXISTS idx_workspace_links_target_workspace ON workspace_links(target_workspace_id);
+
+CREATE TABLE IF NOT EXISTS terminal_links (
+  id                    TEXT PRIMARY KEY,
+  workspace_id          TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  source_terminal_node_id TEXT NOT NULL REFERENCES workspace_terminal_nodes(terminal_node_id) ON DELETE CASCADE,
+  target_terminal_node_id TEXT NOT NULL REFERENCES workspace_terminal_nodes(terminal_node_id) ON DELETE CASCADE,
+  created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(workspace_id, target_terminal_node_id)
+);
+CREATE INDEX IF NOT EXISTS idx_terminal_links_workspace ON terminal_links(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_terminal_links_source ON terminal_links(source_terminal_node_id);
+CREATE INDEX IF NOT EXISTS idx_terminal_links_target ON terminal_links(target_terminal_node_id);
 
 -- FTS5 for full-text search on node content
 CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(

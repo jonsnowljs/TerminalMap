@@ -9,6 +9,7 @@ const NODE_DIMS: Record<string, { w: number; h: number }> = {
   prompt: { w: 280, h: 40 },
   exploration: { w: 280, h: 56 },
   file_edit: { w: 280, h: 56 },
+  terminal: { w: 960, h: 540 },
 };
 
 export function computeLayout(nodes: FlowNode[], edges: FlowEdge[]): FlowNode[] {

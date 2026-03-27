@@ -14,6 +14,7 @@ const app = Fastify({ logger: true });
 // Initialize database
 const db = getDb();
 const queries = new Queries(db);
+queries.recoverRestorableTerminals();
 
 // Initialize services
 const sessionManager = new SessionManager();

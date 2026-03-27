@@ -15,10 +15,17 @@ export function useWebSocket(url: string) {
   const handlersRef = useRef<Map<string, MessageHandler>>(new Map());
   const globalHandlerRef = useRef<MessageHandler | null>(null);
   const [isConnected, setIsConnected] = useState(false);
-  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const shouldReconnectRef = useRef(true);
 
   const connect = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+    if (!shouldReconnectRef.current) return;
+    if (wsRef.current && (
+      wsRef.current.readyState === WebSocket.OPEN
+      || wsRef.current.readyState === WebSocket.CONNECTING
+    )) {
+      return;
+    }
 
     const ws = new WebSocket(url);
     wsRef.current = ws;
@@ -45,8 +52,12 @@ export function useWebSocket(url: string) {
 
     ws.onclose = () => {
       setIsConnected(false);
-      // Reconnect with backoff
-      reconnectTimerRef.current = setTimeout(() => connect(), 2000);
+      if (wsRef.current === ws) {
+        wsRef.current = null;
+      }
+      if (shouldReconnectRef.current) {
+        reconnectTimerRef.current = setTimeout(() => connect(), 2000);
+      }
     };
 
     ws.onerror = () => {
@@ -55,10 +66,16 @@ export function useWebSocket(url: string) {
   }, [url]);
 
   useEffect(() => {
+    shouldReconnectRef.current = true;
     connect();
     return () => {
-      clearTimeout(reconnectTimerRef.current);
+      shouldReconnectRef.current = false;
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
       wsRef.current?.close();
+      wsRef.current = null;
     };
   }, [connect]);
 

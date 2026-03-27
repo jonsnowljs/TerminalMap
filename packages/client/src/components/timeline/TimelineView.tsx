@@ -18,10 +18,10 @@ export default function TimelineView({ onBranchFromNode }: TimelineViewProps) {
   });
 
   return (
-    <div className="h-full overflow-y-auto bg-gray-950 p-3">
+    <div className="h-full overflow-y-auto bg-[var(--panel-bg)] p-3">
       {sorted.length === 0 && (
-        <div className="text-sm text-gray-600 text-center py-8">
-          No commands yet. Type something in the terminal.
+        <div className="py-8 text-center text-sm text-[var(--text-muted)]">
+          No terminal activity yet. Activate a terminal node to start building this mindmap.
         </div>
       )}
       <div className="space-y-1">

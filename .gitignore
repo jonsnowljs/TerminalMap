@@ -6,3 +6,6 @@ dist/
 *.db-shm
 .DS_Store
 .vite/
+.superpowers/brainstorm
+.worktrees/
+.claude/settings.local.json

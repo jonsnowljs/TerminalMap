@@ -1,8 +1,54 @@
-@import "tailwindcss";
+@import 'tailwindcss';
 
-html, body, #root {
+:root {
+  --app-bg: #f6f4ef;
+  --panel-bg: #ffffff;
+  --panel-muted: #f2efe8;
+  --panel-elevated: rgba(255, 255, 255, 0.82);
+  --border-subtle: #ddd7cc;
+  --border-strong: #c9c1b3;
+  --text-strong: #241f17;
+  --text-muted: #6f675c;
+  --text-faint: #978f84;
+
+  --accent-command: #556f8a;
+  --accent-command-soft: #edf3f8;
+  --accent-output: #2f6db3;
+  --accent-output-soft: #e8f1ff;
+  --accent-error: #c55353;
+  --accent-error-soft: #fff0f0;
+  --accent-note: #b88929;
+  --accent-note-soft: #fff6df;
+  --accent-explore: #4d8b5b;
+  --accent-explore-soft: #ebf7ee;
+
+  --terminal-bg: #1d1b19;
+  --terminal-fg: #f4efe7;
+  --terminal-selection: #556f8a4d;
+}
+
+html,
+body,
+#root {
   height: 100%;
   margin: 0;
   padding: 0;
   overflow: hidden;
+  background: var(--app-bg);
+  color: var(--text-strong);
+}
+
+body {
+  font-family: Inter, 'Segoe UI', sans-serif;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+.xterm .xterm-helper-textarea {
+  resize: none !important;
 }
