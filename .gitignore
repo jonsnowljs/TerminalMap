@@ -7,6 +7,6 @@ dist/
 .DS_Store
 .vite/
 .superpowers/brainstorm
-# .superpowers/superpowers/
+.superpowers/superpowers/
 .worktrees/
 .claude/settings.local.json
