@@ -149,7 +149,7 @@ This repo is already prepared for that deployment:
 - [`packages/client/public/_headers`](packages/client/public/_headers) adds:
   - `Cross-Origin-Opener-Policy: same-origin`
   - `Cross-Origin-Embedder-Policy: require-corp`
-- [`packages/client/public/_redirects`](packages/client/public/_redirects) maps `/demo` to `/demo.html` and redirects `/` to `/demo` on Cloudflare Pages
+- [`packages/client/public/_redirects`](packages/client/public/_redirects) maps `/demo` to `/demo.html`
 
 ### Cloudflare Pages Settings
 
@@ -168,7 +168,7 @@ The client build emits two entry pages:
 - `/demo.html` → browser-only WASM demo
 - `/demo` → friendlier route to the WASM demo via `_redirects`
 
-For a frontend-only Cloudflare Pages deployment, `/` redirects to `/demo`, so the hosted site opens the WASM demo instead of the websocket app.
+For a frontend-only Cloudflare Pages deployment without `VITE_WS_URL`, the root entry now boots the WASM demo automatically. Local development still keeps the websocket app at `/`.
 
 ### First Deploy Checklist
 
@@ -186,13 +186,13 @@ For a frontend-only Cloudflare Pages deployment, `/` redirects to `/demo`, so th
    ```
 
 4. Deploy.
-5. Open `/` on your Pages domain. It redirects to `/demo`.
+5. Open `/` on your Pages domain for the WASM demo, or `/demo` for the explicit demo route.
 
 ### Notes
 
 - The first time a user starts the WASM shell, the browser downloads bash from the Wasmer registry.
-- Local development still keeps the full app at `/` because the `_redirects` rule only affects the built Cloudflare Pages deployment.
-- The main app at `/` is not backend-free. On a static host, use `/demo` unless you deploy the backend separately.
+- Cloudflare Pages sets `CF_PAGES=1` during builds, and this repo uses that to render the WASM demo at `/` unless `VITE_WS_URL` is provided for a real backend.
+- The main app at `/` is not backend-free unless you deploy the backend separately and build with `VITE_WS_URL=wss://your-backend-domain/ws`.
 - If you later deploy the main app as well, build with `VITE_WS_URL=wss://your-backend-domain/ws`.
 - Cloudflare Pages itself does not host the Node.js PTY backend from `packages/server`, so `wss://your-pages-domain/ws` will fail unless you provide a separate backend and point `VITE_WS_URL` at it.
 

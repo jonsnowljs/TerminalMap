@@ -9,6 +9,9 @@ const coiHeaders = {
 };
 
 export default defineConfig({
+  define: {
+    __CF_PAGES__: JSON.stringify(process.env.CF_PAGES === '1'),
+  },
   plugins: [react(), tailwindcss()],
   server: {
     port: 5173,
