@@ -28,6 +28,7 @@ function App() {
   const [sessions, setSessions] = useState<SessionInfo[]>([])
   const [centerTerminalNodeId, setCenterTerminalNodeId] = useState<string | null>(null)
   const [focusMode, setFocusMode] = useState<'center' | 'session'>('center')
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   const sessionIdRef = useRef<string | null>(null)
   const initRef = useRef(false)
   const attachedTerminalKeysRef = useRef<Map<string, string>>(new Map())
@@ -781,12 +782,24 @@ function App() {
 
   const toolbar = (
     <div
-      className="flex items-center justify-between border-b px-5 py-3 backdrop-blur-sm"
+      className="flex items-center gap-3 border-b px-3 py-3 backdrop-blur-sm md:px-5"
       style={{
         backgroundColor: 'var(--panel-elevated)',
         borderColor: 'var(--border-subtle)',
       }}
     >
+      {/* Hamburger – mobile only */}
+      <button
+        onClick={() => setSidebarOpen(true)}
+        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-[var(--panel-muted)] md:hidden"
+        aria-label="Open sidebar"
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+          <line x1="3" y1="6" x2="21" y2="6" />
+          <line x1="3" y1="12" x2="21" y2="12" />
+          <line x1="3" y1="18" x2="21" y2="18" />
+        </svg>
+      </button>
       <div className="flex items-center gap-6 self-stretch">
         <ViewToggle />
       </div>
@@ -796,20 +809,37 @@ function App() {
 
   return (
     <div className="flex h-full">
-      <Sidebar
-        sessions={sessions}
-        activeSessionId={sessionId}
-        workspace={workspace}
-        workspaceLinks={workspaceLinks}
-        onSelectSession={handleSelectSession}
-        onDeleteSession={handleDeleteSession}
-        onNewSession={handleCreateSessionInWorkspace}
-        onNewTerminal={createSession}
-        onSelectWorkspace={handleSelectWorkspace}
-        onRenameWorkspace={handleRenameWorkspace}
-        onDeleteWorkspace={handleDeleteWorkspace}
-      />
-      <div className="flex-1">
+      {/* Backdrop – closes drawer when tapping outside on mobile */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/20 md:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
+      {/* Sidebar – always visible on md+, slide-over drawer on mobile */}
+      <div
+        className={`fixed inset-y-0 left-0 z-50 transition-transform duration-300 md:static md:translate-x-0 md:transition-none ${
+          sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+        }`}
+      >
+        <Sidebar
+          sessions={sessions}
+          activeSessionId={sessionId}
+          workspace={workspace}
+          workspaceLinks={workspaceLinks}
+          onSelectSession={(id) => { handleSelectSession(id); setSidebarOpen(false) }}
+          onDeleteSession={handleDeleteSession}
+          onNewSession={handleCreateSessionInWorkspace}
+          onNewTerminal={createSession}
+          onSelectWorkspace={(id) => { handleSelectWorkspace(id); setSidebarOpen(false) }}
+          onRenameWorkspace={handleRenameWorkspace}
+          onDeleteWorkspace={handleDeleteWorkspace}
+          onClose={() => setSidebarOpen(false)}
+        />
+      </div>
+
+      <div className="flex-1 overflow-hidden">
         <AppShell
           toolbar={toolbar}
           top={
