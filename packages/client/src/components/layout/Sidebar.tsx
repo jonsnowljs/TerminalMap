@@ -22,6 +22,7 @@ interface SidebarProps {
   onSelectWorkspace: (workspaceId: string) => void;
   onRenameWorkspace: (workspaceId: string, name: string) => void;
   onDeleteWorkspace: (workspaceId: string) => void;
+  onClose?: () => void;
 }
 
 interface WindowItem {
@@ -42,6 +43,7 @@ export default function Sidebar({
   onSelectWorkspace,
   onRenameWorkspace,
   onDeleteWorkspace,
+  onClose,
 }: SidebarProps) {
   const windows = useMemo<WindowItem[]>(() => {
     const ids: string[] = [];
@@ -118,10 +120,23 @@ export default function Sidebar({
         style={{ borderColor: 'var(--border-subtle)' }}
       >
         <img src="/logo.svg" alt="TerminalMap logo" className="h-9 w-9 rounded-lg bg-white/80 p-1 shadow-sm" />
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <div className="text-sm font-semibold text-[var(--text-strong)]">TerminalMap</div>
           <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-[var(--text-faint)]">Workspace Navigator</div>
         </div>
+        {/* Close button – mobile drawer only */}
+        {onClose && (
+          <button
+            onClick={onClose}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--text-faint)] transition-colors hover:bg-[var(--panel-muted)] md:hidden"
+            aria-label="Close sidebar"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        )}
       </div>
 
       <div
