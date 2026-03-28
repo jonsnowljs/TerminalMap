@@ -13,6 +13,11 @@ export default defineConfig({
     __CF_PAGES__: JSON.stringify(process.env.CF_PAGES === '1'),
   },
   plugins: [react(), tailwindcss()],
+  optimizeDeps: {
+    // Wasmer resolves sibling runtime assets via import.meta.url; prebundling breaks
+    // those relative URLs in dev because the copied .vite dep does not include them.
+    exclude: ['@wasmer/sdk'],
+  },
   server: {
     port: 5173,
     headers: coiHeaders,

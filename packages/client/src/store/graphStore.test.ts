@@ -151,6 +151,51 @@ describe('graphStore workspace terminal state', () => {
     });
   });
 
+  it('adds a terminal node without stealing the active mode from the current terminal', () => {
+    useGraphStore.getState().hydrateWorkspace(workspaceGraph);
+    useGraphStore.getState().addTerminalNode({
+      terminalNodeId: 'term-3',
+      workspaceId: 'ws-1',
+      sessionId: 'sess-3',
+      title: 'Browser Shell 3',
+      mode: 'active',
+      status: 'idle',
+      sourceNodeId: null,
+      snapshot: null,
+      scrollback: null,
+      restoreState: null,
+      position: { x: 640, y: 360 },
+      size: { width: 960, height: 540 },
+    });
+
+    expect(useGraphStore.getState().terminalNodes).toHaveLength(3);
+    expect(useGraphStore.getState().activeTerminalNodeId).toBe('term-1');
+    expect(useGraphStore.getState().terminalNodes.find((node) => node.terminalNodeId === 'term-1')?.mode).toBe('active');
+    expect(useGraphStore.getState().terminalNodes.find((node) => node.terminalNodeId === 'term-3')?.mode).toBe('snapshot');
+  });
+
+  it('stores terminal links separately from graph edges', () => {
+    useGraphStore.getState().hydrateWorkspace(workspaceGraph);
+    useGraphStore.getState().addTerminalLink({
+      id: 'term-link-1',
+      workspaceId: 'ws-1',
+      sourceTerminalNodeId: 'term-1',
+      targetTerminalNodeId: 'term-3',
+      createdAt: '2026-03-26T02:00:00.000Z',
+    });
+
+    expect(useGraphStore.getState().terminalLinks).toEqual([
+      {
+        id: 'term-link-1',
+        workspaceId: 'ws-1',
+        sourceTerminalNodeId: 'term-1',
+        targetTerminalNodeId: 'term-3',
+        createdAt: '2026-03-26T02:00:00.000Z',
+      },
+    ]);
+    expect(useGraphStore.getState().edges).toEqual([]);
+  });
+
   it('ignores activation requests for unknown terminal nodes', () => {
     useGraphStore.getState().hydrateWorkspace(workspaceGraph);
     useGraphStore.getState().setActiveTerminalNode('missing-terminal');

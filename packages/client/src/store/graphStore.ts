@@ -70,6 +70,8 @@ interface GraphState {
   clearPendingBranchAction: () => void;
   clearGraph: () => void;
   hydrateWorkspace: (payload: WorkspaceGraphPayload) => void;
+  addTerminalNode: (terminalNode: WorkspaceTerminalNode) => void;
+  addTerminalLink: (terminalLink: TerminalLink) => void;
   setActiveTerminalNode: (terminalNodeId: string) => void;
   updateTerminalSnapshot: (terminalNodeId: string, snapshot: TerminalSnapshot) => void;
   updateTerminalPosition: (terminalNodeId: string, position: { x: number; y: number }) => void;
@@ -155,6 +157,19 @@ export const useGraphStore = create<GraphState>((set) => ({
       nodes: payload.graphNodes.map((node, index) => graphNodeToFlow(node, index)),
       edges: payload.graphEdges.map(graphEdgeToFlow),
     }),
+
+  addTerminalNode: (terminalNode) =>
+    set((state) => ({
+      terminalNodes: normalizeTerminalModes(
+        [...state.terminalNodes, terminalNode],
+        state.activeTerminalNodeId,
+      ),
+    })),
+
+  addTerminalLink: (terminalLink) =>
+    set((state) => ({
+      terminalLinks: [...state.terminalLinks, terminalLink],
+    })),
 
   setActiveTerminalNode: (terminalNodeId) =>
     set((state) => {
