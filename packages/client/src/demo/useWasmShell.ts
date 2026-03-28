@@ -2,6 +2,12 @@ import { useCallback, useRef, useState } from 'react';
 import type { Terminal } from '@xterm/xterm';
 
 export type ShellStatus = 'idle' | 'initializing' | 'ready' | 'error';
+const WASM_BOOTSTRAP_SCRIPT = [
+  `PROMPT_COMMAND='printf "\\033]133;D;$?\\007\\033]633;P;%s\\007" "$PWD"'`,
+  `PS1='\\[\\033]133;A\\007\\]\\[\\033[32m\\]$ \\[\\033[0m\\]\\[\\033]133;B\\007\\]'`,
+  'clear',
+  '',
+].join('\n');
 
 export interface CompletedCommand {
   id: string;
@@ -50,6 +56,8 @@ export function useWasmShell(
   // OSC sequence parser state
   const oscBufferRef = useRef('');
   const inOscRef = useRef(false);
+  const suppressBootstrapEchoRef = useRef(false);
+  const suppressBufferRef = useRef('');
 
   /**
    * Process a raw stdout chunk:
@@ -110,6 +118,22 @@ export function useWasmShell(
         i++;
       }
 
+      if (suppressBootstrapEchoRef.current) {
+        suppressBufferRef.current += visible;
+        const stripped = suppressBufferRef.current.replace(WASM_BOOTSTRAP_SCRIPT, '');
+        if (stripped !== suppressBufferRef.current) {
+          suppressBootstrapEchoRef.current = false;
+          suppressBufferRef.current = '';
+          visible = stripped;
+        } else if (suppressBufferRef.current.length > WASM_BOOTSTRAP_SCRIPT.length * 2) {
+          suppressBootstrapEchoRef.current = false;
+          visible = suppressBufferRef.current;
+          suppressBufferRef.current = '';
+        } else {
+          visible = '';
+        }
+      }
+
       if (visible) {
         term.write(visible);
         if (activeCommandRef.current) {
@@ -150,19 +174,11 @@ export function useWasmShell(
         },
       });
 
-      const encoder = new TextEncoder();
       const writer = instance.stdin!.getWriter();
-
-      // Configure bash:
-      //  PROMPT_COMMAND emits OSC 133;D;$? (command-end + exit code) before each prompt
-      //  PS1 wraps the visible prompt text with OSC 133;A / 133;B markers
-      const setup = [
-        `PROMPT_COMMAND='printf "\\033]133;D;$?\\007\\033]633;P;%s\\007" "$PWD"'`,
-        `PS1='\\[\\033]133;A\\007\\]\\[\\033[32m\\]$ \\[\\033[0m\\]\\[\\033]133;B\\007\\]'`,
-        'clear',
-        '',
-      ].join('\n');
-      await writer.write(encoder.encode(setup));
+      const encoder = new TextEncoder();
+      suppressBootstrapEchoRef.current = true;
+      suppressBufferRef.current = '';
+      await writer.write(encoder.encode(WASM_BOOTSTRAP_SCRIPT));
 
       // Wire xterm input → bash stdin.
       // Because bash reads line-by-line from a piped stdin (not a real TTY),

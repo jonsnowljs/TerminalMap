@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { EdgeType, NodeType, TerminalStatus, type GraphNode, type TerminalLink, type TerminalSnapshot, type WorkspaceGraphPayload, type WorkspaceTerminalNode } from '@mindmap/shared'
+import { EdgeType, NodeType, TerminalStatus, type GraphNode, type TerminalLink, type TerminalSnapshot, type Workspace, type WorkspaceGraphPayload, type WorkspaceTerminalNode } from '@mindmap/shared'
 import type { Terminal } from '@xterm/xterm'
 import { useGraphStore } from './store/graphStore.js'
 import { useTerminalManager } from './hooks/useTerminalManager.js'
@@ -7,15 +7,40 @@ import AppShell from './components/layout/AppShell.js'
 import GraphView from './components/graph/GraphView.js'
 import TimelineView from './components/timeline/TimelineView.js'
 import ViewToggle from './components/shared/ViewToggle.js'
+import Sidebar from './components/layout/Sidebar.js'
 
-const WORKSPACE_ID = 'wasm-workspace'
+const WASM_BROWSER_STORAGE_KEY = 'mindmap:wasm-browser-state:v1'
 const WORKSPACE_NAME = 'Browser Shell'
-const ROOT_TERMINAL_NODE_ID = 'wasm-terminal-root'
-const ROOT_SESSION_ID = 'wasm-session-root'
 const DEFAULT_CWD = '/root'
 const DEFAULT_TERMINAL_SIZE = { width: 960, height: 540 }
+const WASM_BOOTSTRAP_SCRIPT = [
+  `PROMPT_COMMAND='printf "\\033]133;D;$?\\007\\033]633;P;%s\\007" "$PWD"'`,
+  `PS1='\\[\\033]133;A\\007\\]\\[\\033[32m\\]$ \\[\\033[0m\\]\\[\\033]133;B\\007\\]'`,
+  'clear',
+  '',
+].join('\n')
 
 type WasmSessionStatus = 'idle' | 'initializing' | 'ready' | 'error'
+
+interface SidebarSessionInfo {
+  id: string
+  name: string | null
+  cwd: string
+  status: string
+  workspaceId: string
+  workspaceName?: string | null
+  terminalNodeId?: string | null
+}
+
+interface WasmBrowserWorkspaceState {
+  graph: WorkspaceGraphPayload
+}
+
+interface WasmBrowserState {
+  activeSessionId: string | null
+  activeWorkspaceId: string
+  workspaces: Record<string, WasmBrowserWorkspaceState>
+}
 
 interface CompletedCommand {
   command: string
@@ -36,6 +61,8 @@ interface WasmSessionEntry {
   outputBuffer: string
   previewLines: string[]
   sessionId: string
+  suppressBootstrapEcho: boolean
+  suppressBuffer: string
   startPromise: Promise<void> | null
   status: WasmSessionStatus
   writer: WritableStreamDefaultWriter<Uint8Array> | null
@@ -58,9 +85,32 @@ function buildPreviewLines(output: string) {
 function buildIntroTranscript(title: string) {
   return [
     `\x1b[1;36m${title}\x1b[0m \x1b[2m– Browser Shell\x1b[0m\r\n`,
-    'Use the toolbar button to start a bash session powered by WebAssembly.\r\n',
+    'Preparing a bash session powered by WebAssembly.\r\n',
     '\x1b[2mThe first launch fetches bash from the Wasmer registry.\x1b[0m\r\n\r\n',
   ].join('')
+}
+
+function filterBootstrapEcho(sessionEntry: WasmSessionEntry, chunk: string) {
+  if (!sessionEntry.suppressBootstrapEcho) {
+    return chunk
+  }
+
+  sessionEntry.suppressBuffer += chunk
+  const stripped = sessionEntry.suppressBuffer.replace(WASM_BOOTSTRAP_SCRIPT, '')
+  if (stripped !== sessionEntry.suppressBuffer) {
+    sessionEntry.suppressBootstrapEcho = false
+    sessionEntry.suppressBuffer = ''
+    return stripped
+  }
+
+  if (sessionEntry.suppressBuffer.length > WASM_BOOTSTRAP_SCRIPT.length * 2) {
+    sessionEntry.suppressBootstrapEcho = false
+    const fallback = sessionEntry.suppressBuffer
+    sessionEntry.suppressBuffer = ''
+    return fallback
+  }
+
+  return ''
 }
 
 function makeSnapshot(status: typeof TerminalStatus[keyof typeof TerminalStatus], cwd: string, lastCommand: string | null, previewLines: string[]): TerminalSnapshot {
@@ -77,6 +127,7 @@ function makeSnapshot(status: typeof TerminalStatus[keyof typeof TerminalStatus]
 
 function createTerminalNode({
   id,
+  workspaceId,
   sessionId,
   title,
   position,
@@ -84,13 +135,14 @@ function createTerminalNode({
 }: {
   id: string
   position: { x: number; y: number }
+  workspaceId: string
   sessionId: string
   status?: typeof TerminalStatus[keyof typeof TerminalStatus]
   title: string
 }): WorkspaceTerminalNode {
   return {
     terminalNodeId: id,
-    workspaceId: WORKSPACE_ID,
+    workspaceId,
     sessionId,
     title,
     mode: 'active',
@@ -101,7 +153,7 @@ function createTerminalNode({
       DEFAULT_CWD,
       null,
       [
-        'Start the browser shell to begin.',
+        'Browser shell will start automatically.',
         'Commands run inside WebAssembly in this tab.',
       ],
     ),
@@ -112,16 +164,28 @@ function createTerminalNode({
   }
 }
 
-function createInitialWorkspacePayload(): WorkspaceGraphPayload {
+function createWorkspacePayload({
+  sessionId,
+  terminalNodeId,
+  title,
+  workspaceId,
+  workspaceName,
+}: {
+  sessionId: string
+  terminalNodeId: string
+  title: string
+  workspaceId: string
+  workspaceName: string
+}): WorkspaceGraphPayload {
   const now = new Date().toISOString()
 
   return {
     workspace: {
-      id: WORKSPACE_ID,
-      name: WORKSPACE_NAME,
+      id: workspaceId,
+      name: workspaceName,
       parentWorkspaceId: null,
       createdFromNodeId: null,
-      rootTerminalNodeId: ROOT_TERMINAL_NODE_ID,
+      rootTerminalNodeId: terminalNodeId,
       cwd: DEFAULT_CWD,
       createdAt: now,
       updatedAt: now,
@@ -130,104 +194,103 @@ function createInitialWorkspacePayload(): WorkspaceGraphPayload {
     graphEdges: [],
     workspaceLinks: [],
     terminalLinks: [],
-    activeTerminalNodeId: ROOT_TERMINAL_NODE_ID,
+    activeTerminalNodeId: terminalNodeId,
     terminalNodes: [
       createTerminalNode({
-        id: ROOT_TERMINAL_NODE_ID,
-        sessionId: ROOT_SESSION_ID,
-        title: 'Browser Shell',
+        id: terminalNodeId,
+        workspaceId,
+        sessionId,
+        title,
         position: { x: 96, y: 72 },
       }),
     ],
   }
 }
 
-function WasmSidebar({
-  activeCwd,
-  activeError,
-  activeStatus,
-  activeTitle,
-  commandCount,
-  terminalCount,
-}: {
-  activeCwd: string
-  activeError: string | null
-  activeStatus: WasmSessionStatus
-  activeTitle: string
-  commandCount: number
-  terminalCount: number
-}) {
-  return (
-    <aside
-      className="flex w-72 flex-col overflow-hidden border-r"
-      style={{ backgroundColor: 'var(--panel-muted)', borderColor: 'var(--border-subtle)' }}
-    >
-      <div className="flex items-center gap-3 border-b px-4 py-3" style={{ borderColor: 'var(--border-subtle)' }}>
-        <img src="/logo.svg" alt="TerminalMap logo" className="h-9 w-9 rounded-lg bg-white/80 p-1 shadow-sm" />
-        <div className="min-w-0">
-          <div className="text-sm font-semibold text-[var(--text-strong)]">TerminalMap</div>
-          <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-[var(--text-faint)]">Browser Terminal</div>
-        </div>
-      </div>
+function cloneBrowserState(state: WasmBrowserState): WasmBrowserState {
+  return JSON.parse(JSON.stringify(state)) as WasmBrowserState
+}
 
-      <div className="space-y-3 px-4 py-4">
-        <section
-          className="rounded-2xl border bg-white/80 px-4 py-4 shadow-[0_1px_0_rgba(0,0,0,0.02)]"
-          style={{ borderColor: 'var(--border-subtle)' }}
-        >
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--text-faint)]">Active terminal</div>
-              <div className="mt-1 text-sm font-semibold text-[var(--text-strong)]">{activeTitle}</div>
-            </div>
-            <span
-              className="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
-              style={{
-                backgroundColor: activeStatus === 'error' ? 'var(--accent-error-soft)' : 'var(--accent-command-soft)',
-                color: activeStatus === 'error' ? 'var(--accent-error)' : 'var(--accent-command)',
-              }}
-            >
-              {activeStatus === 'initializing' ? 'loading' : activeStatus}
-            </span>
-          </div>
-          <div className="mt-3 space-y-2 text-xs text-[var(--text-muted)]">
-            <div className="flex items-center justify-between gap-3">
-              <span>Transport</span>
-              <span className="font-mono text-[var(--text-strong)]">wasm</span>
-            </div>
-            <div className="flex items-center justify-between gap-3">
-              <span>Current cwd</span>
-              <span className="truncate font-mono text-[var(--text-strong)]">{activeCwd}</span>
-            </div>
-            <div className="flex items-center justify-between gap-3">
-              <span>Live terminals</span>
-              <span className="font-mono text-[var(--text-strong)]">{terminalCount}</span>
-            </div>
-            <div className="flex items-center justify-between gap-3">
-              <span>Commands captured</span>
-              <span className="font-mono text-[var(--text-strong)]">{commandCount}</span>
-            </div>
-          </div>
-        </section>
+function persistBrowserState(state: WasmBrowserState) {
+  if (typeof window === 'undefined') {
+    return
+  }
 
-        <section
-          className="rounded-2xl border bg-white/80 px-4 py-4 shadow-[0_1px_0_rgba(0,0,0,0.02)]"
-          style={{ borderColor: 'var(--border-subtle)' }}
-        >
-          <div className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--text-faint)]">Notes</div>
-          <div className="mt-3 space-y-2 text-sm leading-6 text-[var(--text-muted)]">
-            <p>The main client is still running, but its terminals are powered by WebAssembly instead of the websocket backend.</p>
-            <p>Drag from a terminal handle to create another browser-backed terminal node.</p>
-            {activeError ? (
-              <p className="rounded-xl px-3 py-2 text-sm" style={{ backgroundColor: 'var(--accent-error-soft)', color: 'var(--accent-error)' }}>
-                {activeError}
-              </p>
-            ) : null}
-          </div>
-        </section>
-      </div>
-    </aside>
-  )
+  window.localStorage.setItem(WASM_BROWSER_STORAGE_KEY, JSON.stringify(state))
+}
+
+function createInitialBrowserState(): WasmBrowserState {
+  const workspaceId = `wasm-workspace-${crypto.randomUUID()}`
+  const terminalNodeId = `wasm-terminal-${crypto.randomUUID()}`
+  const sessionId = `wasm-session-${crypto.randomUUID()}`
+  return {
+    activeSessionId: sessionId,
+    activeWorkspaceId: workspaceId,
+    workspaces: {
+      [workspaceId]: {
+        graph: createWorkspacePayload({
+          sessionId,
+          terminalNodeId,
+          title: 'Browser Shell',
+          workspaceId,
+          workspaceName: WORKSPACE_NAME,
+        }),
+      },
+    },
+  }
+}
+
+function loadBrowserState(): WasmBrowserState {
+  if (typeof window === 'undefined') {
+    return createInitialBrowserState()
+  }
+
+  try {
+    const rawState = window.localStorage.getItem(WASM_BROWSER_STORAGE_KEY)
+    if (!rawState) {
+      return createInitialBrowserState()
+    }
+    const parsed = JSON.parse(rawState) as Partial<WasmBrowserState>
+    if (!parsed || typeof parsed !== 'object' || !parsed.activeWorkspaceId || !parsed.workspaces || Object.keys(parsed.workspaces).length === 0) {
+      return createInitialBrowserState()
+    }
+    if (!parsed.workspaces[parsed.activeWorkspaceId]) {
+      return createInitialBrowserState()
+    }
+    return parsed as WasmBrowserState
+  } catch {
+    return createInitialBrowserState()
+  }
+}
+
+function buildSidebarSessions(browserState: WasmBrowserState): SidebarSessionInfo[] {
+  return Object.values(browserState.workspaces)
+    .flatMap(({ graph }) =>
+      graph.terminalNodes
+        .filter((terminalNode) => Boolean(terminalNode.sessionId))
+        .map<SidebarSessionInfo>((terminalNode) => ({
+          id: terminalNode.sessionId!,
+          name: terminalNode.title,
+          cwd: terminalNode.snapshot?.cwd ?? DEFAULT_CWD,
+          status: graph.activeTerminalNodeId === terminalNode.terminalNodeId ? 'active' : 'idle',
+          workspaceId: graph.workspace.id,
+          workspaceName: graph.workspace.name,
+          terminalNodeId: terminalNode.terminalNodeId,
+        })),
+    )
+    .sort((left, right) => left.workspaceName?.localeCompare(right.workspaceName ?? '') ?? 0)
+}
+
+function findWorkspaceIdBySession(state: WasmBrowserState, sessionId: string) {
+  return Object.entries(state.workspaces).find(([, workspaceState]) =>
+    workspaceState.graph.terminalNodes.some((terminalNode) => terminalNode.sessionId === sessionId),
+  )?.[0] ?? null
+}
+
+function findWorkspaceIdByTerminalNode(state: WasmBrowserState, terminalNodeId: string) {
+  return Object.entries(state.workspaces).find(([, workspaceState]) =>
+    workspaceState.graph.terminalNodes.some((terminalNode) => terminalNode.terminalNodeId === terminalNodeId),
+  )?.[0] ?? null
 }
 
 export default function WasmApp() {
@@ -244,17 +307,23 @@ export default function WasmApp() {
   const addTerminalLink = useGraphStore((state) => state.addTerminalLink)
   const addTerminalNode = useGraphStore((state) => state.addTerminalNode)
   const updateTerminalSnapshot = useGraphStore((state) => state.updateTerminalSnapshot)
+  const updateTerminalPosition = useGraphStore((state) => state.updateTerminalPosition)
+  const updateTerminalSize = useGraphStore((state) => state.updateTerminalSize)
   const setActiveTerminalNode = useGraphStore((state) => state.setActiveTerminalNode)
   const selectNode = useGraphStore((state) => state.selectNode)
   const viewMode = useGraphStore((state) => state.viewMode)
+  const workspace = useGraphStore((state) => state.workspace)
+  const workspaceLinks = useGraphStore((state) => state.workspaceLinks)
   const nodes = useGraphStore((state) => state.nodes)
   const terminalNodes = useGraphStore((state) => state.terminalNodes)
   const activeTerminalNodeId = useGraphStore((state) => state.activeTerminalNodeId)
 
   const sessionsRef = useRef<Map<string, WasmSessionEntry>>(new Map())
+  const browserStateRef = useRef<WasmBrowserState>(loadBrowserState())
   const packagePromiseRef = useRef<Promise<any> | null>(null)
   const graphTailByTerminalRef = useRef<Map<string, string>>(new Map())
   const sequenceRef = useRef(1)
+  const [browserState, setBrowserState] = useState<WasmBrowserState>(browserStateRef.current)
   const [uiVersion, setUiVersion] = useState(0)
   const [centerTerminalNodeId, setCenterTerminalNodeId] = useState<string | null>(null)
   const [focusMode, setFocusMode] = useState<'center' | 'session'>('center')
@@ -262,6 +331,50 @@ export default function WasmApp() {
   const bumpUi = useCallback(() => {
     setUiVersion((current) => current + 1)
   }, [])
+
+  const commitBrowserState = useCallback((updater: (draft: WasmBrowserState) => void) => {
+    let nextState: WasmBrowserState | null = null
+
+    setBrowserState((current) => {
+      const draft = cloneBrowserState(current)
+      updater(draft)
+      nextState = draft
+      browserStateRef.current = draft
+      persistBrowserState(draft)
+      return draft
+    })
+
+    return nextState
+  }, [])
+
+  const hydrateWorkspaceById = useCallback(
+    (workspaceId: string) => {
+      const nextWorkspace = browserStateRef.current.workspaces[workspaceId]
+      if (!nextWorkspace) {
+        return
+      }
+      hydrateWorkspace(nextWorkspace.graph)
+    },
+    [hydrateWorkspace],
+  )
+
+  const updateTerminalInBrowserState = useCallback(
+    (terminalNodeId: string, updater: (terminalNode: WorkspaceTerminalNode, graph: WorkspaceGraphPayload) => void) => {
+      commitBrowserState((draft) => {
+        const workspaceId = findWorkspaceIdByTerminalNode(draft, terminalNodeId)
+        if (!workspaceId) {
+          return
+        }
+        const graph = draft.workspaces[workspaceId]!.graph
+        const terminalNode = graph.terminalNodes.find((node) => node.terminalNodeId === terminalNodeId)
+        if (!terminalNode) {
+          return
+        }
+        updater(terminalNode, graph)
+      })
+    },
+    [commitBrowserState],
+  )
 
   const createSessionEntry = useCallback((terminalNode: WorkspaceTerminalNode) => {
     const sessionEntry: WasmSessionEntry = {
@@ -273,12 +386,14 @@ export default function WasmApp() {
       mountedTerm: null,
       nodeId: terminalNode.terminalNodeId,
       oscBuffer: '',
-      outputBuffer: buildIntroTranscript(terminalNode.title),
+      outputBuffer: terminalNode.scrollback && terminalNode.scrollback.length > 0 ? terminalNode.scrollback : buildIntroTranscript(terminalNode.title),
       previewLines: terminalNode.snapshot?.previewLines ?? [
-        'Start the browser shell to begin.',
+        'Browser shell will start automatically.',
         'Commands run inside WebAssembly in this tab.',
       ],
       sessionId: terminalNode.sessionId ?? `wasm-session-${terminalNode.terminalNodeId}`,
+      suppressBootstrapEcho: false,
+      suppressBuffer: '',
       startPromise: null,
       status: 'idle',
       writer: null,
@@ -295,12 +410,18 @@ export default function WasmApp() {
 
   const syncSnapshot = useCallback(
     (sessionEntry: WasmSessionEntry, status: typeof TerminalStatus[keyof typeof TerminalStatus]) => {
+      const snapshot = makeSnapshot(status, sessionEntry.cwd, sessionEntry.lastCommand, sessionEntry.previewLines)
+      updateTerminalInBrowserState(sessionEntry.nodeId, (terminalNode) => {
+        terminalNode.snapshot = snapshot
+        terminalNode.status = snapshot.status
+        terminalNode.scrollback = sessionEntry.outputBuffer
+      })
       updateTerminalSnapshot(
         sessionEntry.nodeId,
-        makeSnapshot(status, sessionEntry.cwd, sessionEntry.lastCommand, sessionEntry.previewLines),
+        snapshot,
       )
     },
-    [updateTerminalSnapshot],
+    [updateTerminalInBrowserState, updateTerminalSnapshot],
   )
 
   const writeVisible = useCallback((sessionEntry: WasmSessionEntry, text: string) => {
@@ -310,20 +431,36 @@ export default function WasmApp() {
 
   const appendGraphNode = useCallback(
     (terminalNodeId: string, node: GraphNode) => {
-      addNode(node)
-      const previousNodeId = graphTailByTerminalRef.current.get(terminalNodeId)
-      if (previousNodeId) {
-        addEdge({
-          id: crypto.randomUUID(),
-          sourceId: previousNodeId,
-          targetId: node.id,
-          type: EdgeType.SEQUENTIAL,
-          metadata: { terminalNodeId, transport: 'wasm' },
-        })
+      const previousNodeId = graphTailByTerminalRef.current.get(terminalNodeId) ?? null
+      const edge = previousNodeId
+        ? {
+            id: crypto.randomUUID(),
+            sourceId: previousNodeId,
+            targetId: node.id,
+            type: EdgeType.SEQUENTIAL,
+            metadata: { terminalNodeId, transport: 'wasm' },
+          }
+        : null
+
+      updateTerminalInBrowserState(terminalNodeId, (_terminalNode, graph) => {
+        graph.graphNodes.push(node)
+        if (edge) {
+          graph.graphEdges.push(edge)
+        }
+      })
+
+      const currentWorkspaceId = workspace?.id
+      const targetWorkspaceId = findWorkspaceIdByTerminalNode(browserStateRef.current, terminalNodeId)
+      if (currentWorkspaceId && currentWorkspaceId === targetWorkspaceId) {
+        addNode(node)
+        if (edge) {
+          addEdge(edge)
+        }
       }
+
       graphTailByTerminalRef.current.set(terminalNodeId, node.id)
     },
-    [addEdge, addNode],
+    [addEdge, addNode, updateTerminalInBrowserState, workspace?.id],
   )
 
   const completeCommand = useCallback(
@@ -418,10 +555,11 @@ export default function WasmApp() {
         index += 1
       }
 
-      if (visible.length > 0) {
-        writeVisible(sessionEntry, visible)
+      const filteredVisible = filterBootstrapEcho(sessionEntry, visible)
+      if (filteredVisible.length > 0) {
+        writeVisible(sessionEntry, filteredVisible)
         if (sessionEntry.activeCommand) {
-          sessionEntry.activeCommand.rawOutput += visible
+          sessionEntry.activeCommand.rawOutput += filteredVisible
         }
       }
     },
@@ -464,6 +602,7 @@ export default function WasmApp() {
       }
 
       sessionEntry.startPromise = (async () => {
+        let fetchNoticeTimer: number | null = null
         try {
           sessionEntry.status = 'initializing'
           sessionEntry.error = null
@@ -471,8 +610,18 @@ export default function WasmApp() {
           bumpUi()
 
           writeVisible(sessionEntry, '\x1b[33mInitialising WASM runtime…\x1b[0m\r\n')
-          const pkg = await getBashPackage()
           writeVisible(sessionEntry, '\x1b[33mFetching bash from Wasmer registry…\x1b[0m\r\n')
+          fetchNoticeTimer = window.setTimeout(() => {
+            writeVisible(
+              sessionEntry,
+              '\x1b[2mFirst download can take a while. If it never finishes, check network access to Wasmer/CDN endpoints.\x1b[0m\r\n',
+            )
+          }, 5000)
+          const pkg = await getBashPackage()
+          if (fetchNoticeTimer !== null) {
+            window.clearTimeout(fetchNoticeTimer)
+            fetchNoticeTimer = null
+          }
 
           const instance = await pkg.entrypoint.run({
             args: ['-i'],
@@ -486,15 +635,11 @@ export default function WasmApp() {
 
           const writer = instance.stdin!.getWriter()
           sessionEntry.writer = writer
+          sessionEntry.suppressBootstrapEcho = true
+          sessionEntry.suppressBuffer = ''
 
           const encoder = new TextEncoder()
-          const setup = [
-            `PROMPT_COMMAND='printf "\\033]133;D;$?\\007\\033]633;P;%s\\007" "$PWD"'`,
-            `PS1='\\[\\033]133;A\\007\\]\\[\\033[32m\\]$ \\[\\033[0m\\]\\[\\033]133;B\\007\\]'`,
-            'clear',
-            '',
-          ].join('\n')
-          await writer.write(encoder.encode(setup))
+          await writer.write(encoder.encode(WASM_BOOTSTRAP_SCRIPT))
 
           const stdoutReader = instance.stdout.pipeThrough(new TextDecoderStream()).getReader()
           void (async () => {
@@ -533,6 +678,9 @@ export default function WasmApp() {
           syncSnapshot(sessionEntry, TerminalStatus.EXITED)
           bumpUi()
         } finally {
+          if (fetchNoticeTimer !== null) {
+            window.clearTimeout(fetchNoticeTimer)
+          }
           sessionEntry.startPromise = null
         }
       })()
@@ -596,18 +744,28 @@ export default function WasmApp() {
 
   const handleCreateTerminalLink = useCallback(
     (sourceTerminalNodeId: string, targetTerminalNodeId?: string, position?: { x: number; y: number }) => {
+      const currentWorkspaceId = workspace?.id
+      if (!currentWorkspaceId) {
+        return
+      }
+
       if (targetTerminalNodeId) {
-        const existingLink = useGraphStore.getState().terminalLinks.some(
+        const existingLink = terminalNodes.some((node) => node.terminalNodeId === sourceTerminalNodeId)
+          && useGraphStore.getState().terminalLinks.some(
           (link) => link.sourceTerminalNodeId === sourceTerminalNodeId && link.targetTerminalNodeId === targetTerminalNodeId,
         )
         if (!existingLink) {
-          addTerminalLink({
+          const terminalLink = {
             id: crypto.randomUUID(),
-            workspaceId: WORKSPACE_ID,
+            workspaceId: currentWorkspaceId,
             sourceTerminalNodeId,
             targetTerminalNodeId,
             createdAt: new Date().toISOString(),
+          } satisfies TerminalLink
+          commitBrowserState((draft) => {
+            draft.workspaces[currentWorkspaceId]!.graph.terminalLinks.push(terminalLink)
           })
+          addTerminalLink(terminalLink)
         }
         return
       }
@@ -618,20 +776,31 @@ export default function WasmApp() {
       const nextPosition = position ?? { x: 240 + terminalNodes.length * 48, y: 120 + terminalNodes.length * 36 }
       const terminalNode = createTerminalNode({
         id: terminalNodeId,
+        workspaceId: currentWorkspaceId,
         sessionId,
         title,
         position: nextPosition,
       })
-
-      addTerminalNode(terminalNode)
-      addTerminalLink({
+      const terminalLink = {
         id: crypto.randomUUID(),
-        workspaceId: WORKSPACE_ID,
+        workspaceId: currentWorkspaceId,
         sourceTerminalNodeId,
         targetTerminalNodeId: terminalNodeId,
         createdAt: new Date().toISOString(),
-      } satisfies TerminalLink)
+      } satisfies TerminalLink
 
+      commitBrowserState((draft) => {
+        const currentWorkspace = draft.workspaces[currentWorkspaceId]
+        if (!currentWorkspace) {
+          return
+        }
+        currentWorkspace.graph.terminalNodes.push(terminalNode)
+        currentWorkspace.graph.terminalLinks.push(terminalLink)
+        currentWorkspace.graph.activeTerminalNodeId = terminalNodeId
+        draft.activeSessionId = sessionId
+      })
+      addTerminalNode(terminalNode)
+      addTerminalLink(terminalLink)
       createSessionEntry(terminalNode)
       setActiveTerminalNode(terminalNodeId)
       selectNode(terminalNodeId)
@@ -639,15 +808,29 @@ export default function WasmApp() {
       setFocusMode('session')
       bumpUi()
     },
-    [addTerminalLink, addTerminalNode, bumpUi, createSessionEntry, selectNode, setActiveTerminalNode, terminalNodes.length],
+    [addTerminalLink, addTerminalNode, bumpUi, commitBrowserState, createSessionEntry, selectNode, setActiveTerminalNode, terminalNodes, workspace?.id],
   )
 
   useEffect(() => {
-    const initialPayload = createInitialWorkspacePayload()
-    hydrateWorkspace(initialPayload)
-    initialPayload.terminalNodes.forEach((terminalNode) => {
-      createSessionEntry(terminalNode)
+    const initialState = browserStateRef.current
+    Object.values(initialState.workspaces).forEach(({ graph }) => {
+      graph.terminalNodes.forEach((terminalNode) => {
+        createSessionEntry(terminalNode)
+      })
+      graph.graphNodes.forEach((node) => {
+        const terminalNodeId = typeof node.metadata.terminalNodeId === 'string' ? node.metadata.terminalNodeId : null
+        if (terminalNodeId) {
+          graphTailByTerminalRef.current.set(terminalNodeId, node.id)
+        }
+      })
     })
+
+    hydrateWorkspaceById(initialState.activeWorkspaceId)
+    const activeWorkspace = initialState.workspaces[initialState.activeWorkspaceId]?.graph
+    if (activeWorkspace?.activeTerminalNodeId) {
+      setCenterTerminalNodeId(activeWorkspace.activeTerminalNodeId)
+      setFocusMode('session')
+    }
 
     return () => {
       syncRuntimes(new Set())
@@ -659,7 +842,352 @@ export default function WasmApp() {
       graphTailByTerminalRef.current.clear()
       resetWorkspaceState()
     }
-  }, [createSessionEntry, hydrateWorkspace, resetWorkspaceState, syncRuntimes])
+  }, [createSessionEntry, hydrateWorkspaceById, resetWorkspaceState, syncRuntimes])
+
+  useEffect(() => {
+    if (!workspace?.id || !activeTerminalNodeId) {
+      return
+    }
+
+    const activeTerminalNode = terminalNodes.find((node) => node.terminalNodeId === activeTerminalNodeId)
+    const nextSessionId = activeTerminalNode?.sessionId ?? null
+    commitBrowserState((draft) => {
+      if (draft.activeWorkspaceId !== workspace.id) {
+        draft.activeWorkspaceId = workspace.id
+      }
+      draft.activeSessionId = nextSessionId
+      const currentWorkspace = draft.workspaces[workspace.id]
+      if (currentWorkspace) {
+        currentWorkspace.graph.activeTerminalNodeId = activeTerminalNodeId
+        currentWorkspace.graph.terminalNodes = terminalNodes.map((terminalNode) => {
+          const sessionEntry = sessionsRef.current.get(terminalNode.terminalNodeId)
+          return {
+            ...terminalNode,
+            scrollback: sessionEntry?.outputBuffer ?? terminalNode.scrollback,
+          }
+        })
+      }
+    })
+  }, [activeTerminalNodeId, commitBrowserState, terminalNodes, workspace?.id])
+
+  const handleCreateWorkspace = useCallback(() => {
+    const workspaceId = `wasm-workspace-${crypto.randomUUID()}`
+    const terminalNodeId = `wasm-terminal-${crypto.randomUUID()}`
+    const sessionId = `wasm-session-${crypto.randomUUID()}`
+    const graph = createWorkspacePayload({
+      sessionId,
+      terminalNodeId,
+      title: 'Browser Shell',
+      workspaceId,
+      workspaceName: `Window ${Object.keys(browserStateRef.current.workspaces).length + 1}`,
+    })
+
+    commitBrowserState((draft) => {
+      draft.workspaces[workspaceId] = { graph }
+      draft.activeWorkspaceId = workspaceId
+      draft.activeSessionId = sessionId
+    })
+    createSessionEntry(graph.terminalNodes[0]!)
+    hydrateWorkspace(graph)
+    setCenterTerminalNodeId(terminalNodeId)
+    setFocusMode('session')
+  }, [commitBrowserState, createSessionEntry, hydrateWorkspace])
+
+  const handleCreateSessionInWorkspace = useCallback(
+    (workspaceId: string, sourceTerminalNodeId?: string, position?: { x: number; y: number }) => {
+      const workspaceState = browserStateRef.current.workspaces[workspaceId]
+      if (!workspaceState) {
+        return
+      }
+
+      const terminalNodeId = `wasm-terminal-${crypto.randomUUID()}`
+      const sessionId = `wasm-session-${crypto.randomUUID()}`
+      const title = `Browser Shell ${workspaceState.graph.terminalNodes.length + 1}`
+      const terminalNode = createTerminalNode({
+        id: terminalNodeId,
+        workspaceId,
+        sessionId,
+        title,
+        position: position ?? { x: 240 + workspaceState.graph.terminalNodes.length * 48, y: 120 + workspaceState.graph.terminalNodes.length * 36 },
+      })
+      const terminalLink = sourceTerminalNodeId
+        ? ({
+            id: crypto.randomUUID(),
+            workspaceId,
+            sourceTerminalNodeId,
+            targetTerminalNodeId: terminalNodeId,
+            createdAt: new Date().toISOString(),
+          } satisfies TerminalLink)
+        : null
+
+      commitBrowserState((draft) => {
+        const targetWorkspace = draft.workspaces[workspaceId]
+        if (!targetWorkspace) {
+          return
+        }
+        targetWorkspace.graph.terminalNodes.push(terminalNode)
+        if (terminalLink) {
+          targetWorkspace.graph.terminalLinks.push(terminalLink)
+        }
+        targetWorkspace.graph.activeTerminalNodeId = terminalNodeId
+        draft.activeWorkspaceId = workspaceId
+        draft.activeSessionId = sessionId
+      })
+
+      createSessionEntry(terminalNode)
+      if (workspace?.id === workspaceId) {
+        addTerminalNode(terminalNode)
+        if (terminalLink) {
+          addTerminalLink(terminalLink)
+        }
+        setActiveTerminalNode(terminalNodeId)
+        selectNode(terminalNodeId)
+      } else {
+        hydrateWorkspaceById(workspaceId)
+      }
+      setCenterTerminalNodeId(terminalNodeId)
+      setFocusMode('session')
+      bumpUi()
+    },
+    [addTerminalLink, addTerminalNode, bumpUi, commitBrowserState, createSessionEntry, hydrateWorkspaceById, selectNode, setActiveTerminalNode, workspace?.id],
+  )
+
+  const handleSelectWorkspace = useCallback(
+    (workspaceId: string) => {
+      const graph = browserStateRef.current.workspaces[workspaceId]?.graph
+      if (!graph) {
+        return
+      }
+      commitBrowserState((draft) => {
+        draft.activeWorkspaceId = workspaceId
+        draft.activeSessionId = graph.terminalNodes.find((node) => node.terminalNodeId === graph.activeTerminalNodeId)?.sessionId ?? null
+      })
+      hydrateWorkspace(graph)
+      if (graph.activeTerminalNodeId) {
+        setCenterTerminalNodeId(graph.activeTerminalNodeId)
+        setFocusMode('session')
+      }
+    },
+    [commitBrowserState, hydrateWorkspace],
+  )
+
+  const handleSelectSession = useCallback(
+    (sessionId: string) => {
+      const workspaceId = findWorkspaceIdBySession(browserStateRef.current, sessionId)
+      if (!workspaceId) {
+        return
+      }
+      const graph = browserStateRef.current.workspaces[workspaceId]?.graph
+      const terminalNode = graph?.terminalNodes.find((node) => node.sessionId === sessionId)
+      if (!graph || !terminalNode) {
+        return
+      }
+
+      commitBrowserState((draft) => {
+        draft.activeWorkspaceId = workspaceId
+        draft.activeSessionId = sessionId
+        draft.workspaces[workspaceId]!.graph.activeTerminalNodeId = terminalNode.terminalNodeId
+      })
+      hydrateWorkspaceById(workspaceId)
+      setActiveTerminalNode(terminalNode.terminalNodeId)
+      selectNode(terminalNode.terminalNodeId)
+      setCenterTerminalNodeId(terminalNode.terminalNodeId)
+      setFocusMode('session')
+    },
+    [commitBrowserState, hydrateWorkspaceById, selectNode, setActiveTerminalNode],
+  )
+
+  const handleRenameWorkspace = useCallback(
+    (workspaceId: string, name: string) => {
+      const trimmedName = name.trim()
+      if (!trimmedName) {
+        return
+      }
+
+      commitBrowserState((draft) => {
+        const targetWorkspace = draft.workspaces[workspaceId]
+        if (!targetWorkspace) {
+          return
+        }
+        targetWorkspace.graph.workspace.name = trimmedName
+        targetWorkspace.graph.workspace.updatedAt = new Date().toISOString()
+      })
+
+      if (workspace?.id === workspaceId) {
+        hydrateWorkspaceById(workspaceId)
+      }
+    },
+    [commitBrowserState, hydrateWorkspaceById, workspace?.id],
+  )
+
+  const handleRenameSession = useCallback(
+    (sessionId: string, name: string) => {
+      const trimmedName = name.trim()
+      if (!trimmedName) {
+        return
+      }
+
+      const workspaceId = findWorkspaceIdBySession(browserStateRef.current, sessionId)
+      if (!workspaceId) {
+        return
+      }
+
+      commitBrowserState((draft) => {
+        const terminalNode = draft.workspaces[workspaceId]?.graph.terminalNodes.find((node) => node.sessionId === sessionId)
+        if (!terminalNode) {
+          return
+        }
+        const previousTitle = terminalNode.title
+        terminalNode.title = trimmedName
+        const sessionEntry = sessionsRef.current.get(terminalNode.terminalNodeId)
+        if (sessionEntry) {
+          sessionEntry.outputBuffer = sessionEntry.outputBuffer.replace(buildIntroTranscript(previousTitle), buildIntroTranscript(trimmedName))
+        }
+      })
+
+      if (workspace?.id === workspaceId) {
+        hydrateWorkspaceById(workspaceId)
+      }
+      bumpUi()
+    },
+    [bumpUi, commitBrowserState, hydrateWorkspaceById, workspace?.id],
+  )
+
+  const handleDeleteSession = useCallback(
+    (sessionId: string) => {
+      const workspaceId = findWorkspaceIdBySession(browserStateRef.current, sessionId)
+      if (!workspaceId) {
+        return
+      }
+
+      const targetWorkspace = browserStateRef.current.workspaces[workspaceId]?.graph
+      const terminalNode = targetWorkspace?.terminalNodes.find((node) => node.sessionId === sessionId)
+      if (!targetWorkspace || !terminalNode) {
+        return
+      }
+
+      const remainingTerminalNodes = targetWorkspace.terminalNodes.filter((node) => node.sessionId !== sessionId)
+      const nextActiveTerminalNodeId = remainingTerminalNodes.find((node) => node.terminalNodeId !== terminalNode.terminalNodeId)?.terminalNodeId ?? null
+
+      commitBrowserState((draft) => {
+        const graph = draft.workspaces[workspaceId]?.graph
+        if (!graph) {
+          return
+        }
+        graph.terminalNodes = graph.terminalNodes.filter((node) => node.sessionId !== sessionId)
+        graph.terminalLinks = graph.terminalLinks.filter((link) => link.sourceTerminalNodeId !== terminalNode.terminalNodeId && link.targetTerminalNodeId !== terminalNode.terminalNodeId)
+        if (graph.workspace.rootTerminalNodeId === terminalNode.terminalNodeId) {
+          graph.workspace.rootTerminalNodeId = nextActiveTerminalNodeId
+        }
+        graph.activeTerminalNodeId = nextActiveTerminalNodeId
+        if (draft.activeSessionId === sessionId) {
+          draft.activeSessionId = nextActiveTerminalNodeId
+            ? graph.terminalNodes.find((node) => node.terminalNodeId === nextActiveTerminalNodeId)?.sessionId ?? null
+            : null
+        }
+      })
+
+      const sessionEntry = sessionsRef.current.get(terminalNode.terminalNodeId)
+      sessionEntry?.writer?.close().catch(() => {})
+      sessionsRef.current.delete(terminalNode.terminalNodeId)
+      graphTailByTerminalRef.current.delete(terminalNode.terminalNodeId)
+
+      if (workspace?.id === workspaceId) {
+        hydrateWorkspaceById(workspaceId)
+        if (nextActiveTerminalNodeId) {
+          setActiveTerminalNode(nextActiveTerminalNodeId)
+          selectNode(nextActiveTerminalNodeId)
+          setCenterTerminalNodeId(nextActiveTerminalNodeId)
+          setFocusMode('session')
+        }
+      }
+      bumpUi()
+    },
+    [bumpUi, commitBrowserState, hydrateWorkspaceById, selectNode, setActiveTerminalNode, workspace?.id],
+  )
+
+  const handleDeleteWorkspace = useCallback(
+    (workspaceId: string) => {
+      const deletedWorkspace = browserStateRef.current.workspaces[workspaceId]?.graph
+      if (!deletedWorkspace) {
+        return
+      }
+
+      deletedWorkspace.terminalNodes.forEach((terminalNode) => {
+        const sessionEntry = sessionsRef.current.get(terminalNode.terminalNodeId)
+        sessionEntry?.writer?.close().catch(() => {})
+        sessionsRef.current.delete(terminalNode.terminalNodeId)
+        graphTailByTerminalRef.current.delete(terminalNode.terminalNodeId)
+      })
+
+      const remainingWorkspaceIds = Object.keys(browserStateRef.current.workspaces).filter((id) => id !== workspaceId)
+      if (remainingWorkspaceIds.length === 0) {
+        const replacementWorkspaceId = `wasm-workspace-${crypto.randomUUID()}`
+        const replacementTerminalNodeId = `wasm-terminal-${crypto.randomUUID()}`
+        const replacementSessionId = `wasm-session-${crypto.randomUUID()}`
+        const replacementGraph = createWorkspacePayload({
+          sessionId: replacementSessionId,
+          terminalNodeId: replacementTerminalNodeId,
+          title: 'Browser Shell',
+          workspaceId: replacementWorkspaceId,
+          workspaceName: WORKSPACE_NAME,
+        })
+
+        commitBrowserState((draft) => {
+          delete draft.workspaces[workspaceId]
+          draft.workspaces[replacementWorkspaceId] = { graph: replacementGraph }
+          draft.activeWorkspaceId = replacementWorkspaceId
+          draft.activeSessionId = replacementSessionId
+        })
+        createSessionEntry(replacementGraph.terminalNodes[0]!)
+        hydrateWorkspace(replacementGraph)
+        setCenterTerminalNodeId(replacementTerminalNodeId)
+        setFocusMode('session')
+        return
+      }
+
+      const nextWorkspaceId = remainingWorkspaceIds[0]!
+      const nextGraph = browserStateRef.current.workspaces[nextWorkspaceId]!.graph
+      commitBrowserState((draft) => {
+        delete draft.workspaces[workspaceId]
+        draft.activeWorkspaceId = nextWorkspaceId
+        draft.activeSessionId = nextGraph.terminalNodes.find(
+          (node) => node.terminalNodeId === nextGraph.activeTerminalNodeId,
+        )?.sessionId ?? null
+      })
+
+      if (workspace?.id === workspaceId) {
+        hydrateWorkspaceById(nextWorkspaceId)
+        if (nextGraph.activeTerminalNodeId) {
+          setCenterTerminalNodeId(nextGraph.activeTerminalNodeId)
+          setFocusMode('session')
+        }
+      }
+    },
+    [commitBrowserState, createSessionEntry, hydrateWorkspace, hydrateWorkspaceById, workspace?.id],
+  )
+
+  const handleMoveTerminalNode = useCallback(
+    (terminalNodeId: string, position: { x: number; y: number }) => {
+      updateTerminalInBrowserState(terminalNodeId, (terminalNode) => {
+        terminalNode.position = position
+      })
+      updateTerminalPosition(terminalNodeId, position)
+    },
+    [updateTerminalInBrowserState, updateTerminalPosition],
+  )
+
+  const handleResizeTerminalNode = useCallback(
+    (terminalNodeId: string, size: { width: number; height: number }) => {
+      updateTerminalInBrowserState(terminalNodeId, (terminalNode) => {
+        terminalNode.size = size
+      })
+      updateTerminalSize(terminalNodeId, size)
+    },
+    [updateTerminalInBrowserState, updateTerminalSize],
+  )
+
+  const sidebarSessions = useMemo(() => buildSidebarSessions(browserState), [browserState])
 
   useEffect(() => {
     if (viewMode !== 'graph') {
@@ -700,6 +1228,7 @@ export default function WasmApp() {
         runtime.term.reset()
         runtime.term.write(sessionEntry.outputBuffer)
         fitTerminal(terminalNode.terminalNodeId)
+        void startSession(terminalNode.terminalNodeId)
       }
 
       if (activeTerminalNodeId === terminalNode.terminalNodeId) {
@@ -715,7 +1244,7 @@ export default function WasmApp() {
         bumpUi()
       })
     }
-  }, [activeTerminalNodeId, bindRuntime, bumpUi, fitTerminal, focusTerminal, getSessionEntry, handleTerminalData, syncRuntimes, terminalNodes, uiVersion, viewMode])
+  }, [activeTerminalNodeId, bindRuntime, bumpUi, fitTerminal, focusTerminal, getSessionEntry, handleTerminalData, startSession, syncRuntimes, terminalNodes, uiVersion, viewMode])
 
   const commandCount = useMemo(
     () => nodes.filter((node) => node.data.graphNode.type === NodeType.COMMAND).length,
@@ -741,6 +1270,12 @@ export default function WasmApp() {
     >
       <div className="flex items-center gap-6 self-stretch">
         <ViewToggle />
+      </div>
+      <div className="min-w-0 px-4 text-center">
+        <div className="truncate text-sm font-semibold text-[var(--text-strong)]">{activeTitle}</div>
+        <div className="truncate font-mono text-[11px] text-[var(--text-faint)]">
+          {activeCwd} • {commandCount} commands
+        </div>
       </div>
       <div className="flex items-center gap-3">
         {activeStatus === 'idle' ? (
@@ -777,6 +1312,7 @@ export default function WasmApp() {
             }}
             className="rounded-full px-4 py-2 text-sm font-semibold text-white shadow-sm transition-opacity hover:opacity-90"
             style={{ backgroundColor: 'var(--accent-error)' }}
+            title={activeError ?? 'Retry Browser Shell'}
           >
             Retry Browser Shell
           </button>
@@ -787,13 +1323,18 @@ export default function WasmApp() {
 
   return (
     <div className="flex h-full">
-      <WasmSidebar
-        activeCwd={activeCwd}
-        activeError={activeError}
-        activeStatus={activeStatus}
-        activeTitle={activeTitle}
-        commandCount={commandCount}
-        terminalCount={terminalNodes.length}
+      <Sidebar
+        sessions={sidebarSessions}
+        activeSessionId={browserState.activeSessionId}
+        workspace={workspace as Workspace | null}
+        workspaceLinks={workspaceLinks}
+        onSelectSession={handleSelectSession}
+        onDeleteSession={handleDeleteSession}
+        onNewSession={handleCreateSessionInWorkspace}
+        onNewTerminal={handleCreateWorkspace}
+        onSelectWorkspace={handleSelectWorkspace}
+        onRenameWorkspace={handleRenameWorkspace}
+        onDeleteWorkspace={handleDeleteWorkspace}
       />
       <div className="flex-1">
         <AppShell
@@ -802,6 +1343,17 @@ export default function WasmApp() {
             viewMode === 'graph' ? (
               <GraphView
                 onCreateTerminalLink={handleCreateTerminalLink}
+                onMoveTerminalNode={handleMoveTerminalNode}
+                onResizeTerminalNode={handleResizeTerminalNode}
+                onDeleteTerminalNode={(terminalNodeId) => {
+                  const sessionId = browserStateRef.current.workspaces[workspace?.id ?? browserState.activeWorkspaceId]?.graph.terminalNodes.find(
+                    (node) => node.terminalNodeId === terminalNodeId,
+                  )?.sessionId
+                  if (sessionId) {
+                    handleDeleteSession(sessionId)
+                  }
+                }}
+                onRenameSession={handleRenameSession}
                 centerOnTerminalNodeId={centerTerminalNodeId}
                 focusMode={focusMode}
                 onTerminalNodeCentered={(terminalNodeId) => {
